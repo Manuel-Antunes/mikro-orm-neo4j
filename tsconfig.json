@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "noErrorTruncation": true,
+    "paths": {
+      "@mikro-orm/*": ["packages/*/src"]
+    }
+  }
+}

@@ -1,0 +1,107 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# production
+/dist
+/out-tsc
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# build info
+.nx/cache
+.nx/workspace-data
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea
+*.swp
+*.swo
+*~
+web-build/
+apps/mobile/android/
+apps/mobile/ios/
+
+
+test-output
+
+# Next.js
+.next
+out
+vite.config.*.timestamp*
+vitest.config.*.timestamp*
+
+# sst
+.sst
+
+# env
+.env
+.env.dev
+.env.local.prod
+.env.local
+.env.production
+.env.staging
+.env.develop
+
+storybook-static
+
+iac-google-service-account.json
+.vercel
+
+# Docker Data
+docker/*/data
+
+# Secrects
+*.secrets
+
+# Generated files
+__gen__
+
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.cache
+pytest_cache/
+
+reports/unittests
+docker/clickhouse/user_scripts/*
+!docker/clickhouse/user_scripts/.gitkeep
