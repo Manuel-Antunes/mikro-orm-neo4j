@@ -11,26 +11,28 @@ import {
   type EntityManager,
   Reference,
 } from '@mikro-orm/core';
+import { TsMorphMetadataProvider } from '@mikro-orm/reflection';
 import { MikroORM, Node, Rel, RelationshipProperties } from '@mikro-orm/neo4j';
+import {
+  setupNeo4jContainer,
+  StartedNeo4jContainer,
+} from '../src/utils/test/setup-neo4j-container';
 const Neo4jMikroORM = MikroORM;
 // Traditional decorators
 @Entity()
 class Category {
-
   @PrimaryKey()
   id: string = crypto.randomUUID();
 
   @Property()
   categoryName!: string;
 
-  @OneToMany(() => Product, product => product.category)
+  @OneToMany(() => Product, (product) => product.category)
   products = new Collection<Product>(this);
-
 }
 
 @Entity()
 class Product {
-
   @PrimaryKey()
   id: string = crypto.randomUUID();
 
@@ -50,29 +52,25 @@ class Product {
   @ManyToMany(() => Tag)
   @Rel({ type: 'HAS_TAG', direction: 'OUT' })
   tags = new Collection<Tag>(this);
-
 }
 
 @Entity()
 class Tag {
-
   @PrimaryKey()
   id: string = crypto.randomUUID();
 
   @Property()
   name!: string;
 
-  @ManyToMany(() => Product, p => p.tags)
+  @ManyToMany(() => Product, (p) => p.tags)
   @Rel({ type: 'HAS_TAG', direction: 'IN' })
   products = new Collection<Product>(this);
-
 }
 
 // Graph-style decorators
 @Entity()
 @Node()
 class Person {
-
   @Property({ primary: true })
   id: string = crypto.randomUUID();
 
@@ -92,14 +90,12 @@ class Person {
   @ManyToMany(() => Person)
   @Rel({ type: 'WORKS_WITH', direction: 'OUT' })
   colleagues = new Collection<Person>(this);
-
 }
 
 // Node with multiple labels
 @Entity()
 @Node({ labels: ['Employee', 'Manager'] })
 class Executive {
-
   @Property({ primary: true })
   id: string = crypto.randomUUID();
 
@@ -111,7 +107,6 @@ class Executive {
 
   @Property()
   department!: string;
-
 }
 
 @Entity({
@@ -121,13 +116,11 @@ class Executive {
   }),
 })
 class CategorySummary {
-
   @Property()
   categoryName!: string;
 
   @Property()
   totalProducts!: number;
-
 }
 
 @Entity({
@@ -140,9 +133,7 @@ class CategorySummary {
         price: p.price
       } as node
       ${
-        options.orderBy && Object.keys(options.orderBy).length > 0
-          ? 'ORDER BY node.price DESC'
-          : ''
+        options.orderBy && Object.keys(options.orderBy).length > 0 ? 'ORDER BY node.price DESC' : ''
       }
       ${options.limit ? `LIMIT ${options.limit}` : ''}
     `;
@@ -150,7 +141,6 @@ class CategorySummary {
   },
 })
 class ProductWithCategory {
-
   @Property()
   productName!: string;
 
@@ -159,14 +149,12 @@ class ProductWithCategory {
 
   @Property({ nullable: true })
   price?: number;
-
 }
 
 // Neo4j GraphQL-style entities for relationship properties
 @Entity()
 @Node()
 class Actor {
-
   @Property({ primary: true })
   id: string = crypto.randomUUID();
 
@@ -189,13 +177,11 @@ class Actor {
   })
   @Rel({ type: 'ACTED_IN', direction: 'OUT' })
   series = new Collection<Series>(this);
-
 }
 
 @Entity()
 @Node()
 class Movie {
-
   @Property({ primary: true })
   id: string = crypto.randomUUID();
 
@@ -208,16 +194,14 @@ class Movie {
   @Property({ nullable: true })
   tagline?: string;
 
-  @ManyToMany(() => Actor, actor => actor.movies)
+  @ManyToMany(() => Actor, (actor) => actor.movies)
   @Rel({ type: 'ACTED_IN', direction: 'IN' })
   actors = new Collection<Actor>(this);
-
 }
 
 @Entity()
 @Node()
 class Series {
-
   @Property({ primary: true })
   id: string = crypto.randomUUID();
 
@@ -230,16 +214,14 @@ class Series {
   @Property()
   episodes!: number;
 
-  @ManyToMany(() => Actor, actor => actor.series)
+  @ManyToMany(() => Actor, (actor) => actor.series)
   @Rel({ type: 'ACTED_IN', direction: 'IN' })
   actors = new Collection<Actor>(this);
-
 }
 
 @Entity()
 @RelationshipProperties({ type: 'ACTED_IN' })
 class ActedIn {
-
   @PrimaryKey()
   id: string = crypto.randomUUID();
 
@@ -249,15 +231,13 @@ class ActedIn {
   @ManyToOne(() => Movie, { primary: true })
   movie!: Movie;
 
-  @Property()
+  @Property({ type: 'json' })
   roles!: string[];
-
 }
 
 @Entity()
 @RelationshipProperties({ type: 'ACTED_IN' })
 class ActedInSeries {
-
   @PrimaryKey()
   id: string = crypto.randomUUID();
 
@@ -267,16 +247,14 @@ class ActedInSeries {
   @ManyToOne(() => Series, { primary: true })
   series!: Series;
 
-  @Property()
+  @Property({ type: 'json' })
   roles!: string[];
-
 }
 
 // User friendship example for relationship property querying
 @Entity()
 @Node()
 class User {
-
   @Property({ primary: true })
   id: string = crypto.randomUUID();
 
@@ -291,13 +269,11 @@ class User {
   })
   @Rel({ type: 'FRIENDS_WITH', direction: 'OUT' })
   friends = new Collection<User>(this);
-
 }
 
 @Entity()
 @RelationshipProperties({ type: 'FRIENDS_WITH' })
 class FriendsWith {
-
   @PrimaryKey()
   id: string = crypto.randomUUID();
 
@@ -312,15 +288,20 @@ class FriendsWith {
 
   @Property()
   strength!: number;
-
 }
 
 describe('Neo4j driver (MVP)', () => {
   let orm: MikroORM;
+  let container: StartedNeo4jContainer;
 
   beforeAll(async () => {
+    const auth = {
+      username: 'neo4j',
+      password: 'testtest',
+    };
+    container = await setupNeo4jContainer(auth);
     orm = await Neo4jMikroORM.init({
-      clientUrl: 'bolt://localhost:7687',
+      clientUrl: container.connectionUri,
       entities: [
         Product,
         Category,
@@ -338,9 +319,11 @@ describe('Neo4j driver (MVP)', () => {
         FriendsWith,
       ],
       dbName: 'neo4j',
-      user: 'neo4j',
-      password: 'testtest',
+      user: auth.username,
+      password: auth.password,
       ensureDatabase: false,
+      metadataProvider: TsMorphMetadataProvider,
+      allowGlobalContext: true,
     });
   });
 
@@ -350,6 +333,8 @@ describe('Neo4j driver (MVP)', () => {
 
   afterAll(async () => {
     await orm?.close(true);
+    await container?.container?.stop();
+    await container?.network?.stop();
   });
 
   describe('Basic CRUD operations', () => {
@@ -415,11 +400,7 @@ describe('Neo4j driver (MVP)', () => {
 
       const all = await orm.em.find(Category, {});
       expect(all).toHaveLength(3);
-      expect(all.map(c => c.categoryName).sort()).toEqual([
-        'Books',
-        'Clothing',
-        'Electronics',
-      ]);
+      expect(all.map((c) => c.categoryName).sort()).toEqual(['Books', 'Clothing', 'Electronics']);
     });
 
     test('count entities', async () => {
@@ -448,16 +429,8 @@ describe('Neo4j driver (MVP)', () => {
       orm.em.create(Product, { productName: 'Banana', price: 75 });
       await orm.em.flush();
 
-      const sorted = await orm.em.find(
-        Product,
-        {},
-        { orderBy: { productName: 'ASC' } },
-      );
-      expect(sorted.map(p => p.productName)).toEqual([
-        'Apple',
-        'Banana',
-        'Zebra',
-      ]);
+      const sorted = await orm.em.find(Product, {}, { orderBy: { productName: 'ASC' } });
+      expect(sorted.map((p) => p.productName)).toEqual(['Apple', 'Banana', 'Zebra']);
     });
 
     test('find with limit and offset', async () => {
@@ -521,16 +494,12 @@ describe('Neo4j driver (MVP)', () => {
       await orm.em.persistAndFlush([tag1, tag2, prod]);
       orm.em.clear();
 
-      const loaded = await orm.em.findOneOrFail(
-        Product,
-        { id: prod.id },
-        { populate: ['tags'] },
-      );
+      const loaded = await orm.em.findOneOrFail(Product, { id: prod.id }, { populate: ['tags'] });
       expect(loaded.tags.length).toBe(2);
       expect(
         loaded.tags
           .getItems()
-          .map(t => t.name)
+          .map((t) => t.name)
           .sort(),
       ).toEqual(['electronics', 'mobile']);
     });
@@ -542,11 +511,7 @@ describe('Neo4j driver (MVP)', () => {
       await orm.em.persistAndFlush([john, jane]);
       orm.em.clear();
 
-      const loaded = await orm.em.findOneOrFail(
-        Person,
-        { id: john.id },
-        { populate: ['knows'] },
-      );
+      const loaded = await orm.em.findOneOrFail(Person, { id: john.id }, { populate: ['knows'] });
       expect(loaded.knows!.$.name).toBe('Jane');
       expect(loaded.knows!.$.age).toBe(28);
     });
@@ -568,7 +533,7 @@ describe('Neo4j driver (MVP)', () => {
       expect(
         loaded.colleagues
           .getItems()
-          .map(p => p.name)
+          .map((p) => p.name)
           .sort(),
       ).toEqual(['Bob', 'Charlie']);
     });
@@ -576,7 +541,7 @@ describe('Neo4j driver (MVP)', () => {
 
   describe('Transactions', () => {
     test('successful transaction', async () => {
-      await orm.em.transactional(async em => {
+      await orm.em.transactional(async (em) => {
         const cat = em.create(Category, { categoryName: 'Transaction Test' });
         em.persist(cat);
         await em.flush();
@@ -588,7 +553,7 @@ describe('Neo4j driver (MVP)', () => {
 
     test('transactional rollback', async () => {
       await expect(
-        orm.em.transactional(async em => {
+        orm.em.transactional(async (em) => {
           const cat = em.create(Category, { categoryName: 'Rollback' });
           em.persist(cat);
           await em.flush();
@@ -601,12 +566,12 @@ describe('Neo4j driver (MVP)', () => {
     });
 
     test('nested transaction (auto-handled)', async () => {
-      await orm.em.transactional(async em1 => {
+      await orm.em.transactional(async (em1) => {
         const cat1 = em1.create(Category, { categoryName: 'Outer' });
         em1.persist(cat1);
         await em1.flush();
 
-        await em1.transactional(async em2 => {
+        await em1.transactional(async (em2) => {
           const cat2 = em2.create(Category, { categoryName: 'Inner' });
           em2.persist(cat2);
           await em2.flush();
@@ -681,7 +646,7 @@ describe('Neo4j driver (MVP)', () => {
         'MATCH (c:category) RETURN c.categoryName as name',
       );
       expect(results).toHaveLength(2);
-      expect(results.map(r => r.name).sort()).toEqual(['Test1', 'Test2']);
+      expect(results.map((r) => r.name).sort()).toEqual(['Test1', 'Test2']);
     });
 
     test('run custom cypher via repository', async () => {
@@ -762,10 +727,7 @@ describe('Neo4j driver (MVP)', () => {
         $or: [{ productName: 'Phone' }, { productName: 'Mouse' }],
       } as any);
       expect(results).toHaveLength(2);
-      expect(results.map(r => r.productName).sort()).toEqual([
-        'Mouse',
-        'Phone',
-      ]);
+      expect(results.map((r) => r.productName).sort()).toEqual(['Mouse', 'Phone']);
     });
   });
 
@@ -790,11 +752,7 @@ describe('Neo4j driver (MVP)', () => {
         { id: exec.id },
       );
       expect(results).toHaveLength(1);
-      expect(results[0].labels.sort()).toEqual([
-        'Employee',
-        'Manager',
-        'executive',
-      ]);
+      expect(results[0].labels.sort()).toEqual(['Employee', 'Manager', 'executive']);
     });
   });
 
@@ -835,12 +793,12 @@ describe('Neo4j driver (MVP)', () => {
       );
 
       expect(results.length).toBe(2);
-      const user1Result = results.find(r => r.name === 'User1');
+      const user1Result = results.find((r) => r.name === 'User1');
       expect(user1Result).toBeDefined();
       expect(user1Result!.completedLessons).toBe(12);
       expect(user1Result!.level).toBe('INTERMEDIATE');
 
-      const user2Result = results.find(r => r.name === 'User2');
+      const user2Result = results.find((r) => r.name === 'User2');
       expect(user2Result).toBeDefined();
       expect(user2Result!.completedLessons).toBe(5);
       expect(user2Result!.level).toBe('BEGINNER');
@@ -888,10 +846,10 @@ describe('Neo4j driver (MVP)', () => {
       );
 
       expect(usersWithRoles.length).toBe(2);
-      const studentData = usersWithRoles.find(u => u.name === 'Alice');
+      const studentData = usersWithRoles.find((u) => u.name === 'Alice');
       expect(studentData?.roles).toContain('Student');
 
-      const adminData = usersWithRoles.find(u => u.name === 'Bob');
+      const adminData = usersWithRoles.find((u) => u.name === 'Bob');
       expect(adminData?.roles).toContain('Admin');
     });
 
@@ -980,12 +938,8 @@ describe('Neo4j driver (MVP)', () => {
       );
 
       expect(productions.length).toBe(2);
-      expect(productions.find(p => p.title === 'The Matrix')?.type).toBe(
-        'Movie',
-      );
-      expect(productions.find(p => p.title === 'Breaking Bad')?.type).toBe(
-        'Series',
-      );
+      expect(productions.find((p) => p.title === 'The Matrix')?.type).toBe('Movie');
+      expect(productions.find((p) => p.title === 'Breaking Bad')?.type).toBe('Series');
     });
   });
 
@@ -1067,13 +1021,7 @@ describe('Neo4j driver (MVP)', () => {
         roles: ['Elrond'],
       });
 
-      await orm.em.persistAndFlush([
-        actor,
-        matrix,
-        lordOfRings,
-        actedInMatrix,
-        actedInLotr,
-      ]);
+      await orm.em.persistAndFlush([actor, matrix, lordOfRings, actedInMatrix, actedInLotr]);
       orm.em.clear();
 
       // Load actor with movies
@@ -1086,7 +1034,7 @@ describe('Neo4j driver (MVP)', () => {
       expect(loadedActor.movies.length).toBe(2);
       const movieTitles = loadedActor.movies
         .getItems()
-        .map(m => m.title)
+        .map((m) => m.title)
         .sort();
       expect(movieTitles).toEqual(['The Lord of the Rings', 'The Matrix']);
 
@@ -1190,13 +1138,7 @@ describe('Neo4j driver (MVP)', () => {
         roles: ['Narrator'],
       });
 
-      await orm.em.persistAndFlush([
-        actor,
-        movie,
-        series,
-        actedInMovie,
-        actedInSeries,
-      ]);
+      await orm.em.persistAndFlush([actor, movie, series, actedInMovie, actedInSeries]);
       orm.em.clear();
 
       // Load actor with both movies and series
@@ -1294,13 +1236,9 @@ describe('Neo4j driver (MVP)', () => {
       expect(loadedMovie.actors.length).toBe(3);
       const actorNames = loadedMovie.actors
         .getItems()
-        .map(a => a.name)
+        .map((a) => a.name)
         .sort();
-      expect(actorNames).toEqual([
-        'Carrie-Anne Moss',
-        'Keanu Reeves',
-        'Laurence Fishburne',
-      ]);
+      expect(actorNames).toEqual(['Carrie-Anne Moss', 'Keanu Reeves', 'Laurence Fishburne']);
 
       // Query all actors for the movie with roles
       const results = await orm.em.run<{
@@ -1694,11 +1632,7 @@ describe('Neo4j driver (MVP)', () => {
 
       test('should build MATCH with WHERE clause', () => {
         const qb = orm.em.createQueryBuilder(Movie);
-        const { cypher, params } = qb
-          .match()
-          .where('title', 'The Matrix')
-          .return()
-          .build();
+        const { cypher, params } = qb.match().where('title', 'The Matrix').return().build();
 
         expect(cypher).toContain('MATCH');
         expect(cypher).toContain('WHERE');
@@ -1750,10 +1684,7 @@ describe('Neo4j driver (MVP)', () => {
 
       test('should build MERGE query', () => {
         const qb = orm.em.createQueryBuilder(Movie);
-        const { cypher, params } = qb
-          .merge({ title: 'The Matrix' })
-          .return()
-          .build();
+        const { cypher, params } = qb.merge({ title: 'The Matrix' }).return().build();
 
         expect(cypher).toContain('MERGE');
         expect(cypher).toContain('Movie');
@@ -1799,20 +1730,10 @@ describe('Neo4j driver (MVP)', () => {
         const Cypher = qb.getCypher();
         const node = qb.getNode();
 
-        const title1 = Cypher.eq(
-          node.property('title'),
-          new Cypher.Param('The Matrix'),
-        );
-        const title2 = Cypher.eq(
-          node.property('title'),
-          new Cypher.Param('Inception'),
-        );
+        const title1 = Cypher.eq(node.property('title'), new Cypher.Param('The Matrix'));
+        const title2 = Cypher.eq(node.property('title'), new Cypher.Param('Inception'));
 
-        const { cypher, params } = qb
-          .match()
-          .where(Cypher.or(title1, title2))
-          .return()
-          .build();
+        const { cypher, params } = qb.match().where(Cypher.or(title1, title2)).return().build();
 
         expect(cypher).toContain('OR');
         expect(params).toHaveProperty('param0', 'The Matrix');
@@ -1827,9 +1748,7 @@ describe('Neo4j driver (MVP)', () => {
 
         const { cypher, params } = qb
           .match()
-          .where(
-            Cypher.not(Cypher.contains(titleProp, new Cypher.Param('Matrix'))),
-          )
+          .where(Cypher.not(Cypher.contains(titleProp, new Cypher.Param('Matrix'))))
           .return()
           .build();
 
@@ -1841,11 +1760,7 @@ describe('Neo4j driver (MVP)', () => {
     describe('Sorting and Pagination', () => {
       test('should build query with ORDER BY', () => {
         const qb = orm.em.createQueryBuilder(Movie);
-        const { cypher } = qb
-          .match()
-          .return()
-          .orderBy('released', 'DESC')
-          .build();
+        const { cypher } = qb.match().return().orderBy('released', 'DESC').build();
 
         expect(cypher).toContain('ORDER BY');
         expect(cypher).toContain('released');
@@ -1895,22 +1810,14 @@ describe('Neo4j driver (MVP)', () => {
 
       test('should build DELETE query', () => {
         const qb = orm.em.createQueryBuilder(Movie);
-        const { cypher } = qb
-          .match()
-          .where('title', 'OldMovie')
-          .delete()
-          .build();
+        const { cypher } = qb.match().where('title', 'OldMovie').delete().build();
 
         expect(cypher).toContain('DETACH DELETE');
       });
 
       test('should build DELETE query without DETACH', () => {
         const qb = orm.em.createQueryBuilder(Movie);
-        const { cypher } = qb
-          .match()
-          .where('title', 'OldMovie')
-          .delete(false)
-          .build();
+        const { cypher } = qb.match().where('title', 'OldMovie').delete(false).build();
 
         expect(cypher).toContain('DELETE');
         expect(cypher).not.toContain('DETACH');
@@ -1920,11 +1827,7 @@ describe('Neo4j driver (MVP)', () => {
     describe('Relationships', () => {
       test('should build query with relationship pattern', () => {
         const qb = orm.em.createQueryBuilder(Movie);
-        const { cypher } = qb
-          .match()
-          .related('ACTED_IN', 'left', 'Actor')
-          .return()
-          .build();
+        const { cypher } = qb.match().related('ACTED_IN', 'left', 'Actor').return().build();
 
         expect(cypher).toContain('ACTED_IN');
         expect(cypher).toContain('Actor');
@@ -1932,11 +1835,7 @@ describe('Neo4j driver (MVP)', () => {
 
       test('should handle relationship direction: left', () => {
         const qb = orm.em.createQueryBuilder(Movie);
-        const { cypher } = qb
-          .match()
-          .related('ACTED_IN', 'left', 'Actor')
-          .return()
-          .build();
+        const { cypher } = qb.match().related('ACTED_IN', 'left', 'Actor').return().build();
 
         expect(cypher).toContain('<-');
         expect(cypher).toContain('ACTED_IN');
@@ -1944,11 +1843,7 @@ describe('Neo4j driver (MVP)', () => {
 
       test('should handle relationship direction: right', () => {
         const qb = orm.em.createQueryBuilder(Actor);
-        const { cypher } = qb
-          .match()
-          .related('ACTED_IN', 'right', 'Movie')
-          .return()
-          .build();
+        const { cypher } = qb.match().related('ACTED_IN', 'right', 'Movie').return().build();
 
         expect(cypher).toContain('-[');
         expect(cypher).toContain('ACTED_IN');
@@ -1985,10 +1880,7 @@ describe('Neo4j driver (MVP)', () => {
           .getMany();
 
         const qb3 = orm.em.createQueryBuilder(Movie);
-        await qb3
-          .create({ id: 3, title: 'Interstellar', released: 2014 })
-          .return()
-          .getMany();
+        await qb3.create({ id: 3, title: 'Interstellar', released: 2014 }).return().getMany();
 
         orm.em.clear();
       });
@@ -2008,10 +1900,7 @@ describe('Neo4j driver (MVP)', () => {
 
       test('should execute query with multiple results', async () => {
         const qb = orm.em.createQueryBuilder(Movie);
-        const results = await qb
-          .match()
-          .return(['title', 'released'])
-          .getMany();
+        const results = await qb.match().return(['title', 'released']).getMany();
 
         expect(results.length).toBeGreaterThanOrEqual(3);
       });
@@ -2029,7 +1918,7 @@ describe('Neo4j driver (MVP)', () => {
           .getMany();
 
         expect(results.length).toBeGreaterThanOrEqual(2);
-        results.forEach(movie => {
+        results.forEach((movie) => {
           expect(movie.released).toBeGreaterThanOrEqual(2010);
         });
       });
@@ -2044,9 +1933,7 @@ describe('Neo4j driver (MVP)', () => {
 
         expect(results.length).toBeGreaterThanOrEqual(3);
         for (let i = 0; i < results.length - 1; i++) {
-          expect(results[i].released).toBeGreaterThanOrEqual(
-            results[i + 1].released,
-          );
+          expect(results[i].released).toBeGreaterThanOrEqual(results[i + 1].released);
         }
       });
 
@@ -2075,11 +1962,7 @@ describe('Neo4j driver (MVP)', () => {
 
         // Test getOne() with no results
         const qb2 = orm.em.createQueryBuilder(Movie);
-        const notFound = await qb2
-          .match()
-          .where('title', 'NonExistent')
-          .return(['title'])
-          .getOne();
+        const notFound = await qb2.match().where('title', 'NonExistent').return(['title']).getOne();
 
         expect(notFound).toBeNull();
       });
@@ -2169,16 +2052,10 @@ describe('Neo4j driver (MVP)', () => {
         await orm.schema.clearDatabase();
 
         const qb1 = orm.em.createQueryBuilder(Movie);
-        await qb1
-          .create({ id: 10, title: 'Test Movie 1', released: 2020 })
-          .return()
-          .getMany();
+        await qb1.create({ id: 10, title: 'Test Movie 1', released: 2020 }).return().getMany();
 
         const qb2 = orm.em.createQueryBuilder(Movie);
-        await qb2
-          .create({ id: 11, title: 'Test Movie 2', released: 2021 })
-          .return()
-          .getMany();
+        await qb2.create({ id: 11, title: 'Test Movie 2', released: 2021 }).return().getMany();
 
         orm.em.clear();
       });
@@ -2187,11 +2064,7 @@ describe('Neo4j driver (MVP)', () => {
         const movieRepo = orm.em.getRepository(Movie);
         const qb = movieRepo.createQueryBuilder();
 
-        const result = await qb
-          .match()
-          .where('released', 2020)
-          .return(['title'])
-          .getOne();
+        const result = await qb.match().where('released', 2020).return(['title']).getOne();
 
         expect(result).not.toBeNull();
         expect(result!.title).toBe('Test Movie 1');
@@ -2213,9 +2086,7 @@ describe('Neo4j driver (MVP)', () => {
 
         expect(() => {
           qb.where('title', 'Test');
-        }).toThrow(
-          'Cannot add WHERE clause without a MATCH, CREATE, or MERGE clause',
-        );
+        }).toThrow('Cannot add WHERE clause without a MATCH, CREATE, or MERGE clause');
       });
 
       test('should throw error when RETURN is called without clause', () => {
@@ -2248,16 +2119,10 @@ describe('Neo4j driver (MVP)', () => {
 
         // Create actor and movie using query builder
         const qbActor = orm.em.createQueryBuilder(Actor);
-        await qbActor
-          .create({ id: 1, name: 'Keanu Reeves', born: 1964 })
-          .return()
-          .getMany();
+        await qbActor.create({ id: 1, name: 'Keanu Reeves', born: 1964 }).return().getMany();
 
         const qbMovie = orm.em.createQueryBuilder(Movie);
-        await qbMovie
-          .create({ id: 100, title: 'The Matrix', released: 1999 })
-          .return()
-          .getMany();
+        await qbMovie.create({ id: 100, title: 'The Matrix', released: 1999 }).return().getMany();
 
         orm.em.clear();
       });
@@ -2265,10 +2130,7 @@ describe('Neo4j driver (MVP)', () => {
       test('should handle complex filtering with multiple conditions', async () => {
         // First verify data exists
         const qbCheck = orm.em.createQueryBuilder(Movie);
-        const all = await qbCheck
-          .match()
-          .return(['title', 'released'])
-          .getMany();
+        const all = await qbCheck.match().return(['title', 'released']).getMany();
         expect(all.length).toBeGreaterThanOrEqual(1);
 
         const qb = orm.em.createQueryBuilder(Movie);
@@ -2279,10 +2141,7 @@ describe('Neo4j driver (MVP)', () => {
           node.property('title'),
           new Cypher.Param('Matrix'),
         );
-        const releasedBefore2000 = Cypher.lt(
-          node.property('released'),
-          new Cypher.Param(2000),
-        );
+        const releasedBefore2000 = Cypher.lt(node.property('released'), new Cypher.Param(2000));
 
         const results = await qb
           .match()
@@ -2291,7 +2150,7 @@ describe('Neo4j driver (MVP)', () => {
           .getMany();
 
         expect(results.length).toBeGreaterThanOrEqual(1);
-        results.forEach(movie => {
+        results.forEach((movie) => {
           expect(movie.title).toContain('Matrix');
           expect(movie.released).toBeLessThan(2000);
         });
@@ -2336,10 +2195,7 @@ describe('Neo4j driver (MVP)', () => {
 
       test('should allow saving and reusing query parts', async () => {
         // Create base query that can be reused
-        const baseQuery = orm.em
-          .createQueryBuilder<Movie>('Movie')
-          .match()
-          .where('released', 1999);
+        const baseQuery = orm.em.createQueryBuilder<Movie>('Movie').match().where('released', 1999);
 
         // Create two different queries from the same base
         const query1 = orm.em
@@ -2564,15 +2420,8 @@ describe('Neo4j driver (MVP)', () => {
         const Cypher = orm.em.createQueryBuilder().getCypher();
         const actorNode = new Cypher.Node();
 
-        const subClause = new Cypher.Match(
-          new Cypher.Pattern(actorNode, { labels: ['Actor'] }),
-        )
-          .where(
-            Cypher.eq(
-              actorNode.property('name'),
-              new Cypher.Param('Keanu Reeves'),
-            ),
-          )
+        const subClause = new Cypher.Match(new Cypher.Pattern(actorNode, { labels: ['Actor'] }))
+          .where(Cypher.eq(actorNode.property('name'), new Cypher.Param('Keanu Reeves')))
           .return([actorNode.property('name'), 'name']);
 
         const qb = orm.em.createQueryBuilder(Movie);
@@ -2638,11 +2487,7 @@ describe('Neo4j driver (MVP)', () => {
           .related(relationship, { type: 'ACTED_IN' })
           .to(targetNode);
 
-        const { cypher } = qb
-          .match()
-          .where(qb.exists(existsPattern))
-          .return(['name'])
-          .build();
+        const { cypher } = qb.match().where(qb.exists(existsPattern)).return(['name']).build();
 
         expect(cypher).toContain('MATCH');
         expect(cypher).toContain('WHERE');
@@ -2713,11 +2558,7 @@ describe('Neo4j driver (MVP)', () => {
     describe('Entity-Based Query Building', () => {
       test('should extract relationship metadata from @Rel decorator', () => {
         const qb = orm.em.createQueryBuilder(Actor);
-        const { cypher } = qb
-          .match()
-          .related(Actor, 'movies')
-          .return(['name'])
-          .build();
+        const { cypher } = qb.match().related(Actor, 'movies').return(['name']).build();
 
         expect(cypher).toContain('MATCH');
         expect(cypher).toContain('ACTED_IN');
@@ -2727,11 +2568,7 @@ describe('Neo4j driver (MVP)', () => {
 
       test('should extract relationship metadata from @Rel decorator', () => {
         const qb = orm.em.createQueryBuilder(Movie);
-        const { cypher } = qb
-          .match()
-          .related(Movie, 'actors')
-          .return(['title'])
-          .build();
+        const { cypher } = qb.match().related(Movie, 'actors').return(['title']).build();
 
         expect(cypher).toContain('MATCH');
         expect(cypher).toContain('ACTED_IN');
@@ -2761,14 +2598,12 @@ describe('Neo4j driver (MVP)', () => {
         @Entity()
         @Node({ labels: ['Employee', 'Manager'] })
         class Executive {
-
           @PrimaryKey()
           id!: number;
 
           @Property()
           name!: string;
-
-}
+        }
 
         const qb = orm.em.createQueryBuilder<Executive>('Executive');
         const { cypher } = qb.match().return(['name']).build();
@@ -2838,9 +2673,7 @@ describe('Neo4j driver (MVP)', () => {
         const movies = await qb
           .match()
           .related(Movie, 'actors')
-          .where(
-            Cypher.eq(node.property('title'), new Cypher.Param('The Matrix')),
-          )
+          .where(Cypher.eq(node.property('title'), new Cypher.Param('The Matrix')))
           .return(['title'])
           .getMany();
 
@@ -2849,11 +2682,7 @@ describe('Neo4j driver (MVP)', () => {
 
       test('should accept relationship entity class directly', () => {
         const qb = orm.em.createQueryBuilder(User);
-        const { cypher } = qb
-          .match()
-          .related(FriendsWith)
-          .return(['name'])
-          .build();
+        const { cypher } = qb.match().related(FriendsWith).return(['name']).build();
 
         expect(cypher).toContain('MATCH');
         expect(cypher).toContain('FRIENDS_WITH');
@@ -2898,11 +2727,7 @@ describe('Neo4j driver (MVP)', () => {
 
         // Query using relationship entity class - create query builder for Cypher verification
         const qb1 = orm.em.createQueryBuilder(User);
-        const { cypher, params } = qb1
-          .match()
-          .related(FriendsWith)
-          .return(['username'])
-          .build();
+        const { cypher, params } = qb1.match().related(FriendsWith).return(['username']).build();
 
         // Verify the query is built correctly
         expect(cypher).toContain('FRIENDS_WITH');
@@ -2910,11 +2735,7 @@ describe('Neo4j driver (MVP)', () => {
 
         // Execute the query using a new query builder
         const qb2 = orm.em.createQueryBuilder(User);
-        const users = await qb2
-          .match()
-          .related(FriendsWith)
-          .return(['username'])
-          .getMany();
+        const users = await qb2.match().related(FriendsWith).return(['username']).getMany();
 
         expect(Array.isArray(users)).toBe(true);
         // Query should execute successfully (may or may not return results depending on data)

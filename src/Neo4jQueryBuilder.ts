@@ -60,12 +60,11 @@ export interface CallOptions {
  * ```
  */
 export class Neo4jQueryBuilder<T = any> {
-
   private node: Cypher.Node;
   private _pattern?: Cypher.Pattern;
   private clause?: any;
   private readonly em?: Neo4jEntityManager;
-  private readonly entityName?: EntityName<T>;
+
   private readonly labels?: string[];
 
   // Store query parts separately for flexible composition
@@ -79,16 +78,12 @@ export class Neo4jQueryBuilder<T = any> {
   private deleteOperation?: { detach: boolean };
 
   constructor(entityName?: EntityName<T>, em?: Neo4jEntityManager) {
-    this.entityName = entityName;
     this.em = em;
     this.node = new Cypher.Node();
 
     // Extract labels from entity name if provided
     if (entityName) {
-      const labelString =
-        typeof entityName === 'string'
-          ? entityName
-          : (entityName.name as string);
+      const labelString = typeof entityName === 'string' ? entityName : (entityName.name as string);
       this.labels = [labelString];
     }
   }
@@ -165,9 +160,7 @@ export class Neo4jQueryBuilder<T = any> {
    */
   where(propertyOrPredicate: string | any, value?: any): this {
     if (!this.clauseType) {
-      throw new Error(
-        'Cannot add WHERE clause without a MATCH, CREATE, or MERGE clause',
-      );
+      throw new Error('Cannot add WHERE clause without a MATCH, CREATE, or MERGE clause');
     }
 
     let predicate: any;
@@ -249,9 +242,7 @@ export class Neo4jQueryBuilder<T = any> {
     if (!properties) {
       this.returnProperties = null; // null means return entire node
     } else {
-      this.returnProperties = Array.isArray(properties)
-        ? properties
-        : [properties];
+      this.returnProperties = Array.isArray(properties) ? properties : [properties];
     }
 
     return this;
@@ -398,12 +389,7 @@ export class Neo4jQueryBuilder<T = any> {
    */
   related(
     relationshipTypeOrProperty: string | EntityClass<any>,
-    optionsOrDirection?:
-      | RelationshipOptions
-      | 'left'
-      | 'right'
-      | 'none'
-      | string,
+    optionsOrDirection?: RelationshipOptions | 'left' | 'right' | 'none' | string,
     targetLabelOrEntity?: string | EntityClass<any>,
     relationshipAlias?: string,
   ): this {
@@ -418,9 +404,11 @@ export class Neo4jQueryBuilder<T = any> {
     // OR related(RelationshipEntityClass, options)
     if (typeof relationshipTypeOrProperty === 'function') {
       // Check if this is a relationship entity (has @RelationshipProperties)
-      const isRelEntity = this.em && Neo4jCypherBuilder.isRelationshipEntity(
-        this.em.getMetadata().find(relationshipTypeOrProperty as any)!,
-      );
+      const isRelEntity =
+        this.em &&
+        Neo4jCypherBuilder.isRelationshipEntity(
+          this.em.getMetadata().find(relationshipTypeOrProperty as any)!,
+        );
 
       if (isRelEntity) {
         // Handle relationship entity class: related(FriendsWith, options)
@@ -428,13 +416,13 @@ export class Neo4jQueryBuilder<T = any> {
         relationshipType = Neo4jCypherBuilder.getRelationshipEntityType(relMeta);
 
         // Extract target entity from relationship entity's @ManyToOne properties
-        const [sourceProp, targetProp] = Neo4jCypherBuilder.getRelationshipEntityEnds(relMeta);
+        const [, targetProp] = Neo4jCypherBuilder.getRelationshipEntityEnds(relMeta);
 
         // Use options or default
         const options = typeof optionsOrDirection === 'object' ? optionsOrDirection : {};
         opts = {
           direction: options.direction || 'right',
-          targetEntity: options.targetEntity || targetProp.targetMeta?.class as EntityClass<any>,
+          targetEntity: options.targetEntity || (targetProp.targetMeta?.class as EntityClass<any>),
           properties: options.properties,
           length: options.length,
           variable: options.variable,
@@ -485,12 +473,8 @@ export class Neo4jQueryBuilder<T = any> {
     ) {
       relationshipType = relationshipTypeOrProperty;
       opts = {
-        direction:
-          optionsOrDirection === 'none' ? 'undirected' : optionsOrDirection,
-        targetLabel:
-          typeof targetLabelOrEntity === 'string'
-            ? targetLabelOrEntity
-            : undefined,
+        direction: optionsOrDirection === 'none' ? 'undirected' : optionsOrDirection,
+        targetLabel: typeof targetLabelOrEntity === 'string' ? targetLabelOrEntity : undefined,
         targetEntity:
           typeof targetLabelOrEntity !== 'string'
             ? (targetLabelOrEntity as EntityClass<any>)
@@ -508,9 +492,7 @@ export class Neo4jQueryBuilder<T = any> {
     const relationshipOptions: any = { type: relationshipType, direction };
 
     if (opts.properties) {
-      relationshipOptions.properties = this.convertPropertiesToParams(
-        opts.properties,
-      );
+      relationshipOptions.properties = this.convertPropertiesToParams(opts.properties);
     }
 
     if (opts.length !== undefined) {
@@ -525,13 +507,14 @@ export class Neo4jQueryBuilder<T = any> {
         targetLabels = meta ? Neo4jCypherBuilder.getNodeLabels(meta) : undefined;
       }
       if (!targetLabels) {
-        const name = typeof opts.targetEntity === 'function' ? opts.targetEntity.name : (opts.targetEntity as any).name;
+        const name =
+          typeof opts.targetEntity === 'function'
+            ? opts.targetEntity.name
+            : (opts.targetEntity as any).name;
         targetLabels = [name];
       }
     } else {
-      targetLabels =
-        opts.targetLabels ||
-        (opts.targetLabel ? [opts.targetLabel] : undefined);
+      targetLabels = opts.targetLabels || (opts.targetLabel ? [opts.targetLabel] : undefined);
     }
 
     const targetNode = new Cypher.Node();
@@ -568,13 +551,9 @@ export class Neo4jQueryBuilder<T = any> {
    * })
    * ```
    */
-  pattern(
-    callback: (cypher: typeof Cypher, node: Cypher.Node) => Cypher.Pattern,
-  ): this {
+  pattern(callback: (cypher: typeof Cypher, node: Cypher.Node) => Cypher.Pattern): this {
     if (!this.clauseType) {
-      throw new Error(
-        'pattern() must be called after match(), create(), or merge()',
-      );
+      throw new Error('pattern() must be called after match(), create(), or merge()');
     }
 
     this._pattern = callback(Cypher, this.node);
@@ -799,10 +778,7 @@ export class Neo4jQueryBuilder<T = any> {
       // Combine all predicates with AND
       let combinedPredicate = this.wherePredicates[0];
       for (let i = 1; i < this.wherePredicates.length; i++) {
-        combinedPredicate = Cypher.and(
-          combinedPredicate,
-          this.wherePredicates[i],
-        );
+        combinedPredicate = Cypher.and(combinedPredicate, this.wherePredicates[i]);
       }
       clause = clause.where(combinedPredicate);
     }
@@ -830,7 +806,7 @@ export class Neo4jQueryBuilder<T = any> {
       if (this.returnProperties === null) {
         clause = clause.return(this.node);
       } else {
-        const returnExpressions = this.returnProperties.map(prop => [
+        const returnExpressions = this.returnProperties.map((prop) => [
           this.node.property(prop),
           prop,
         ]);
@@ -849,9 +825,7 @@ export class Neo4jQueryBuilder<T = any> {
     for (const { property, direction } of this.orderByItems) {
       const prop = this.node.property(property);
       const sortItem =
-        direction === 'DESC'
-          ? ([prop, 'DESC'] as [any, 'DESC'])
-          : ([prop, 'ASC'] as [any, 'ASC']);
+        direction === 'DESC' ? ([prop, 'DESC'] as [any, 'DESC']) : ([prop, 'ASC'] as [any, 'ASC']);
       clause = clause.orderBy(sortItem);
     }
 
@@ -939,21 +913,18 @@ export class Neo4jQueryBuilder<T = any> {
     this.limit(1);
 
     const { cypher, params } = this.build();
-    const result = await (this.em as any).run(cypher, params) as T[];
+    const result = (await (this.em as any).run(cypher, params)) as T[];
     return result.length > 0 ? result[0] : null;
   }
 
   /**
    * Converts properties object to Cypher parameters.
    */
-  private convertPropertiesToParams(
-    properties: Record<string, any>,
-  ): Record<string, any> {
+  private convertPropertiesToParams(properties: Record<string, any>): Record<string, any> {
     const result: Record<string, any> = {};
     for (const [key, value] of Object.entries(properties)) {
       result[key] = new Cypher.Param(value);
     }
     return result;
   }
-
 }

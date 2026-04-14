@@ -1,6 +1,5 @@
 import { MetadataStorage } from '@mikro-orm/core';
 
-
 export interface Neo4jNodeOptions {
   /**
    * Additional Neo4j labels for this node.

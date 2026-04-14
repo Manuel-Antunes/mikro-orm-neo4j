@@ -1,8 +1,25 @@
-node_modules
-src
-tests
-coverage
-temp
-yarn-error.log
-data
-tsconfig.*
+# Source files
+src/
+__tests__/
+
+# Config files
+.husky/
+.vscode/
+.github/
+*.config.*
+.prettierrc
+.prettierignore
+.lintstagedrc.js
+commitlint.config.js
+tsconfig.*.json
+
+# Development files
+*.log
+coverage/
+.nx/
+out-tsc/
+
+# Git files
+.git
+.gitignore
+.gitmodules

@@ -1,8 +1,12 @@
-import { ExceptionConverter, type DriverException, UniqueConstraintViolationException, type Dictionary } from '@mikro-orm/core';
+import {
+  ExceptionConverter,
+  type DriverException,
+  UniqueConstraintViolationException,
+  type Dictionary,
+} from '@mikro-orm/core';
 
 // Neo4j error codes documented at https://neo4j.com/docs/status-codes/current/
 export class Neo4jExceptionConverter extends ExceptionConverter {
-
   override convertException(exception: Error & Dictionary): DriverException {
     const code = exception.code as string | undefined;
 
@@ -12,5 +16,4 @@ export class Neo4jExceptionConverter extends ExceptionConverter {
 
     return super.convertException(exception);
   }
-
 }

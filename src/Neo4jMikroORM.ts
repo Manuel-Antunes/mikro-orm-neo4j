@@ -1,19 +1,33 @@
-import { defineConfig, MikroORM, type EntityManager, type EntityManagerType, type IDatabaseDriver, type Options } from '@mikro-orm/core';
+import {
+  defineConfig,
+  MikroORM,
+  type EntityManager,
+  type EntityManagerType,
+  type IDatabaseDriver,
+  type Options,
+} from '@mikro-orm/core';
 import { Neo4jDriver } from './Neo4jDriver';
 import type { Neo4jEntityManager } from './Neo4jEntityManager';
 
-export class Neo4jMikroORM<EM extends EntityManager = Neo4jEntityManager> extends MikroORM<Neo4jDriver, EM> {
+export class Neo4jMikroORM<EM extends EntityManager = Neo4jEntityManager> extends MikroORM<
+  Neo4jDriver,
+  EM
+> {
+  protected static DRIVER = Neo4jDriver;
 
-  private static DRIVER = Neo4jDriver;
-
-  static override async init<D extends IDatabaseDriver = Neo4jDriver, EM extends EntityManager = D[typeof EntityManagerType] & EntityManager>(options?: Options<D, EM>): Promise<MikroORM<D, EM>> {
+  static override async init<
+    D extends IDatabaseDriver = Neo4jDriver,
+    EM extends EntityManager = D[typeof EntityManagerType] & EntityManager,
+  >(options?: Options<D, EM>): Promise<MikroORM<D, EM>> {
     return super.init(options);
   }
 
-  static override initSync<D extends IDatabaseDriver = Neo4jDriver, EM extends EntityManager = D[typeof EntityManagerType] & EntityManager>(options: Options<D, EM>): MikroORM<D, EM> {
+  static override initSync<
+    D extends IDatabaseDriver = Neo4jDriver,
+    EM extends EntityManager = D[typeof EntityManagerType] & EntityManager,
+  >(options: Options<D, EM>): MikroORM<D, EM> {
     return super.initSync(options);
   }
-
 }
 
 export type Neo4jOptions = Options<Neo4jDriver>;

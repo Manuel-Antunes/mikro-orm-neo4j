@@ -1,10 +1,17 @@
-import { Platform, type Constructor, type EntityManager, type EntityProperty, type IPrimaryKey, type PopulateOptions, type Dictionary } from '@mikro-orm/core';
+import {
+  Platform,
+  type Constructor,
+  type EntityManager,
+  type EntityProperty,
+  type IPrimaryKey,
+  type PopulateOptions,
+  type Dictionary,
+} from '@mikro-orm/core';
 import { Neo4jExceptionConverter } from './Neo4jExceptionConverter';
 import { Neo4jSchemaGenerator } from './Neo4jSchemaGenerator';
 import { Neo4jEntityRepository } from './Neo4jEntityRepository';
 
 export class Neo4jPlatform extends Platform {
-
   protected override readonly exceptionConverter = new Neo4jExceptionConverter();
 
   override usesImplicitTransactions(): boolean {
@@ -23,7 +30,12 @@ export class Neo4jPlatform extends Platform {
     Neo4jSchemaGenerator.register(orm);
   }
 
-  override getExtension<T>(extensionName: string, extensionKey: string, moduleName: string, em: EntityManager): T {
+  override getExtension<T>(
+    extensionName: string,
+    extensionKey: string,
+    moduleName: string,
+    em: EntityManager,
+  ): T {
     if (extensionName === 'EntityGenerator') {
       throw new Error('EntityGenerator is not supported for the Neo4j driver.');
     }
@@ -60,7 +72,11 @@ export class Neo4jPlatform extends Platform {
     return ['$not'].includes(operator);
   }
 
-  override shouldHaveColumn<T>(prop: EntityProperty<T>, populate: PopulateOptions<T>[], exclude?: string[]): boolean {
+  override shouldHaveColumn<T>(
+    prop: EntityProperty<T>,
+    populate: PopulateOptions<T>[],
+    exclude?: string[],
+  ): boolean {
     // Graph stores everything as properties on the node; collections are resolved separately
     if (super.shouldHaveColumn(prop, populate, exclude)) {
       return true;
@@ -84,5 +100,4 @@ export class Neo4jPlatform extends Platform {
   override convertJsonToJSValue(value: unknown): unknown {
     return value;
   }
-
 }

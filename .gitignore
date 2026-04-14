@@ -105,3 +105,5 @@ pytest_cache/
 reports/unittests
 docker/clickhouse/user_scripts/*
 !docker/clickhouse/user_scripts/.gitkeep
+tmp
+temp

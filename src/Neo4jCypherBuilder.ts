@@ -6,7 +6,6 @@ import { getRelationshipMetadata } from './utils/getRelationshipMetadata';
  * Provides shared helpers for getting labels, relationship types, directions, etc.
  */
 export class Neo4jCypherBuilder {
-
   /**
    * Extracts Neo4j labels from entity metadata.
    * Includes the primary label (collection name) and any additional labels from @Node decorator.
@@ -31,9 +30,8 @@ export class Neo4jCypherBuilder {
     property: EntityProperty | string,
     allowFallback = true,
   ): string | undefined {
-    const entityClass = typeof sourceEntity === 'function'
-      ? sourceEntity
-      : (sourceEntity as EntityMetadata<T>).class;
+    const entityClass =
+      typeof sourceEntity === 'function' ? sourceEntity : (sourceEntity as EntityMetadata<T>).class;
 
     const propertyName = typeof property === 'string' ? property : property.name;
 
@@ -92,7 +90,7 @@ export class Neo4jCypherBuilder {
     meta: EntityMetadata<T>,
   ): [EntityProperty<T>, EntityProperty<T>] {
     const props = Object.values(meta.properties) as EntityProperty<T>[];
-    const manyToOneProps = props.filter(p => p.kind === ReferenceKind.MANY_TO_ONE);
+    const manyToOneProps = props.filter((p) => p.kind === ReferenceKind.MANY_TO_ONE);
 
     if (manyToOneProps.length !== 2) {
       throw new Error(
@@ -116,11 +114,12 @@ export class Neo4jCypherBuilder {
    * @param direction - Neo4j direction ('IN' or 'OUT')
    * @returns QueryBuilder direction ('left', 'right', or 'undirected')
    */
-  static convertDirection(direction: 'IN' | 'OUT' | undefined): 'left' | 'right' | 'undirected' | undefined {
+  static convertDirection(
+    direction: 'IN' | 'OUT' | undefined,
+  ): 'left' | 'right' | 'undirected' | undefined {
     if (!direction) {
       return undefined;
     }
     return direction === 'IN' ? 'left' : 'right';
   }
-
 }

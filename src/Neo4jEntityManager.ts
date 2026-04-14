@@ -10,12 +10,11 @@ import type { Neo4jEntityRepository } from './Neo4jEntityRepository';
 import { Neo4jQueryBuilder } from './Neo4jQueryBuilder';
 
 export class Neo4jEntityManager<
-  Driver extends Neo4jDriver = Neo4jDriver
+  Driver extends Neo4jDriver = Neo4jDriver,
 > extends EntityManager<Driver> {
-
   override getRepository<
     T extends object,
-    U extends EntityRepository<T> = Neo4jEntityRepository<T>
+    U extends EntityRepository<T> = Neo4jEntityRepository<T>,
   >(entityName: EntityName<T>): GetRepository<T, U> {
     return super.getRepository<T, U>(entityName);
   }
@@ -31,10 +30,7 @@ export class Neo4jEntityManager<
     return super.transactional(cb, options);
   }
 
-  async run<T = any>(
-    cypher: string,
-    params?: Record<string, unknown>,
-  ): Promise<T[]> {
+  async run<T = any>(cypher: string, params?: Record<string, unknown>): Promise<T[]> {
     const res = await this.getConnection().executeRaw(cypher, params);
     return res.records.map((r: any) => {
       // Instead of using toObject(), manually extract each field to preserve types
@@ -49,17 +45,12 @@ export class Neo4jEntityManager<
 
   private convertNeo4jValue(value: any): any {
     // Handle Neo4j Integer objects
-    if (
-      value &&
-      typeof value === 'object' &&
-      'low' in value &&
-      'high' in value
-    ) {
+    if (value && typeof value === 'object' && 'low' in value && 'high' in value) {
       return value.toNumber ? value.toNumber() : Number(value.low);
     }
     // Handle arrays recursively
     if (Array.isArray(value)) {
-      return value.map(v => this.convertNeo4jValue(v));
+      return value.map((v) => this.convertNeo4jValue(v));
     }
     // Handle objects recursively
     if (value && typeof value === 'object' && value.constructor === Object) {
@@ -72,10 +63,7 @@ export class Neo4jEntityManager<
     return value;
   }
 
-  async aggregate<T = any>(
-    cypher: string,
-    params?: Record<string, unknown>,
-  ): Promise<T[]> {
+  async aggregate<T = any>(cypher: string, params?: Record<string, unknown>): Promise<T[]> {
     return this.run<T>(cypher, params);
   }
 
@@ -112,9 +100,6 @@ export class Neo4jEntityManager<
   }
 
   override getConnection(type?: any): ReturnType<Driver['getConnection']> {
-    return this.getDriver().getConnection(type) as ReturnType<
-      Driver['getConnection']
-    >;
+    return this.getDriver().getConnection(type) as ReturnType<Driver['getConnection']>;
   }
-
 }

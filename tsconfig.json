@@ -1,10 +1,15 @@
 {
-  "extends": "./tsconfig.build.json",
-  "compilerOptions": {
-    "baseUrl": ".",
-    "noErrorTruncation": true,
-    "paths": {
-      "@mikro-orm/*": ["packages/*/src"]
+  "extends": "./tsconfig.base.json",
+  "include": [
+    "tsup.config.ts"
+  ],
+
+  "references": [
+    {
+      "path": "./tsconfig.lib.json"
+    },
+    {
+      "path": "./tsconfig.spec.json"
     }
-  }
+  ]
 }

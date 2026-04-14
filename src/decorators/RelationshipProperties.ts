@@ -1,6 +1,5 @@
 import { type EntityOptions, MetadataStorage } from '@mikro-orm/core';
 
-
 export interface Neo4jRelationshipOptions extends EntityOptions<any> {
   /**
    * The relationship type in Neo4j.

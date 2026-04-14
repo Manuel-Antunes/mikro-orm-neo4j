@@ -42,7 +42,6 @@ interface Neo4jQueryOptions<T> {
 }
 
 export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
-
   override [EntityManagerType]!: Neo4jEntityManager<this>;
 
   protected override readonly connection = new Neo4jConnection(this.config);
@@ -67,7 +66,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     T extends object,
     P extends string = never,
     F extends string = '*',
-    E extends string = never
+    E extends string = never,
   >(
     entityName: string,
     where: FilterQuery<T>,
@@ -96,21 +95,15 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       },
       populate,
     );
-    const res = await this.connection.executeRaw(
-      query.cypher,
-      query.params,
-      options.ctx,
-    );
-    return res.records.map((r: any) =>
-      this.hydrateWithRelations(meta, r, populate),
-    );
+    const res = await this.connection.executeRaw(query.cypher, query.params, options.ctx);
+    return res.records.map((r: any) => this.hydrateWithRelations(meta, r, populate));
   }
 
   override async findOne<
     T extends object,
     P extends string = never,
     F extends string = '*',
-    E extends string = never
+    E extends string = never,
   >(
     entityName: string,
     where: FilterQuery<T>,
@@ -133,11 +126,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       { where, orderBy: options.orderBy as any, limit: 1 },
       populate,
     );
-    const res = await this.connection.executeRaw(
-      query.cypher,
-      query.params,
-      options.ctx,
-    );
+    const res = await this.connection.executeRaw(query.cypher, query.params, options.ctx);
     const record = res.records[0];
     if (!record) {
       return null;
@@ -199,12 +188,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     // Get the node from the first key in the record (cypher-builder auto-generates names like 'this0')
     const resultNode = res.records[0].get(res.records[0].keys[0]);
     if (payload.relations.length) {
-      await this.persistRelations(
-        meta,
-        resultNode.properties.id,
-        payload.relations,
-        options.ctx,
-      );
+      await this.persistRelations(meta, resultNode.properties.id, payload.relations, options.ctx);
     }
     return this.transformResult(meta, resultNode.properties as EntityData<T>);
   }
@@ -260,13 +244,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     const resultNode = res.records[0]?.get(res.records[0]?.keys[0]);
     if (resultNode && payload.relations.length) {
       const idValue = this.convertNeo4jValue(resultNode.properties?.id);
-      await this.persistRelations(
-        meta,
-        idValue,
-        payload.relations,
-        options.ctx,
-        true,
-      );
+      await this.persistRelations(meta, idValue, payload.relations, options.ctx, true);
     }
     return resultNode
       ? this.transformResult(meta, resultNode.properties as EntityData<T>)
@@ -281,12 +259,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
   ): Promise<QueryResult<T>> {
     const rows: EntityData<T>[] = [];
     for (let i = 0; i < where.length; i++) {
-      const res = await this.nativeUpdate(
-        entityName,
-        where[i],
-        data[i],
-        options,
-      );
+      const res = await this.nativeUpdate(entityName, where[i], data[i], options);
       if ((res as any)?.affectedRows !== 0) {
         rows.push(res as EntityData<T>);
       }
@@ -324,11 +297,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     } as any;
   }
 
-  override async aggregate(
-    entityName: string,
-    pipeline: any[],
-  ): Promise<any[]> {
-    const meta = this.metadata.find(entityName)!;
+  override async aggregate(entityName: string, pipeline: any[]): Promise<any[]> {
     const cypher = pipeline.join('\n');
     const res = await this.connection.executeRaw(cypher, {});
     return res.records.map((r: any) => this.convertNeo4jRecord(r.toObject()));
@@ -346,11 +315,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
 
     const exprResult =
       typeof meta.expression === 'function'
-        ? meta.expression(
-            this.createEntityManager(),
-            where as any,
-            options as any,
-          )
+        ? meta.expression(this.createEntityManager(), where as any, options as any)
         : meta.expression;
 
     const { cypher, params = {} } =
@@ -395,8 +360,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     options: any,
   ): Promise<EntityData<T>[]> {
     const relType = Neo4jCypherBuilder.getRelationshipEntityType(meta);
-    const [sourceProp, targetProp] =
-      Neo4jCypherBuilder.getRelationshipEntityEnds(meta);
+    const [sourceProp, targetProp] = Neo4jCypherBuilder.getRelationshipEntityEnds(meta);
 
     const sourceLabels = sourceProp.targetMeta
       ? Neo4jCypherBuilder.getNodeLabels(sourceProp.targetMeta)
@@ -434,10 +398,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
 
     // Apply ORDER BY
     if (options.orderBy) {
-      const orderClauses = this.buildRelationshipOrderClauses(
-        rel,
-        options.orderBy as any,
-      );
+      const orderClauses = this.buildRelationshipOrderClauses(rel, options.orderBy as any);
       if (orderClauses.length > 0) {
         query = query.orderBy(...orderClauses);
       }
@@ -487,17 +448,11 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
         result[targetProp.name] = targetProps[targetPK.name];
       }
 
-      return this.mapResult(
-        result as EntityDictionary<T>,
-        meta,
-      ) as EntityData<T>;
+      return this.mapResult(result as EntityDictionary<T>, meta) as EntityData<T>;
     });
   }
 
-  private mapRecord<T extends object>(
-    meta: EntityMetadata<T>,
-    node: any,
-  ): EntityData<T> {
+  private mapRecord<T extends object>(meta: EntityMetadata<T>, node: any): EntityData<T> {
     if (!node) {
       return null as any;
     }
@@ -505,44 +460,6 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     // Convert Neo4j types before mapping
     const converted = this.convertNeo4jRecord(props);
     return this.mapResult(converted, meta) as EntityData<T>;
-  }
-
-  private buildMatch<T extends object>(
-    meta: EntityMetadata<T>,
-    options: Neo4jQueryOptions<T>,
-  ): { cypher: string; params: Dictionary } {
-    const labels = Neo4jCypherBuilder.getNodeLabels(meta);
-    const node = new Cypher.Node();
-    const pattern = new Cypher.Pattern(node, { labels });
-    // Return node with an alias so we can retrieve it later
-    let query: any = new Cypher.Match(pattern).return([node, 'node']);
-
-    // Apply WHERE
-    if (options.where && Object.keys(options.where).length > 0) {
-      const whereClauses = this.buildWhereClauses(node, options.where);
-      if (whereClauses.length > 0) {
-        query = query.where(Cypher.and(...whereClauses));
-      }
-    }
-
-    // Apply ORDER BY
-    if (options.orderBy) {
-      const orderClauses = this.buildOrderClauses(node, options.orderBy);
-      for (const orderClause of orderClauses) {
-        query = query.orderBy(orderClause);
-      }
-    }
-
-    // Apply SKIP and LIMIT
-    if (options.offset != null) {
-      query = query.skip(Math.floor(options.offset));
-    }
-    if (options.limit != null) {
-      query = query.limit(Math.floor(options.limit));
-    }
-
-    const { cypher, params } = query.build();
-    return { cypher, params };
   }
 
   private buildMatchWithPopulate<T extends object>(
@@ -575,15 +492,9 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
         }
 
         const relType = Neo4jCypherBuilder.getRelationshipType(meta, prop);
-        const direction = Neo4jCypherBuilder.getRelationshipDirection(
-          meta.class,
-          fieldName,
-        );
+        const direction = Neo4jCypherBuilder.getRelationshipDirection(meta.class, fieldName);
 
-        if (
-          prop.kind === ReferenceKind.MANY_TO_ONE ||
-          prop.kind === ReferenceKind.ONE_TO_ONE
-        ) {
+        if (prop.kind === ReferenceKind.MANY_TO_ONE || prop.kind === ReferenceKind.ONE_TO_ONE) {
           const targetLabels = prop.targetMeta
             ? Neo4jCypherBuilder.getNodeLabels(prop.targetMeta)
             : [prop.type];
@@ -697,17 +608,13 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
         const prop = meta.properties[fieldName as keyof typeof meta.properties];
         if (
           prop &&
-          (prop.kind === ReferenceKind.MANY_TO_ONE ||
-            prop.kind === ReferenceKind.ONE_TO_ONE)
+          (prop.kind === ReferenceKind.MANY_TO_ONE || prop.kind === ReferenceKind.ONE_TO_ONE)
         ) {
           try {
             const relAlias = `rel_${fieldName}`;
             const relNode = record.get(relAlias);
             if (relNode?.properties) {
-              (result as any)[fieldName] = this.mapRecord(
-                prop.targetMeta!,
-                relNode,
-              );
+              (result as any)[fieldName] = this.mapRecord(prop.targetMeta!, relNode);
             }
           } catch (e) {
             // Relation not found, leave as undefined
@@ -725,9 +632,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
                 // additional work to merge relationship properties
                 (result as any)[fieldName] = relData
                   .filter((item: any) => item?.node?.properties)
-                  .map((item: any) =>
-                    this.mapRecord(prop.targetMeta!, item.node),
-                  );
+                  .map((item: any) => this.mapRecord(prop.targetMeta!, item.node));
               } else {
                 // Without pivot entity: array of nodes
                 (result as any)[fieldName] = relData
@@ -752,19 +657,14 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     node: Cypher.Node,
     where: FilterQuery<T>,
   ): Cypher.Predicate[] {
-    if (
-      !where ||
-      (typeof where === 'object' && Object.keys(where).length === 0)
-    ) {
+    if (!where || (typeof where === 'object' && Object.keys(where).length === 0)) {
       return [];
     }
 
     const clauses: Cypher.Predicate[] = [];
     Object.entries(where as Dictionary).forEach(([key, value]) => {
       if (key === '$and' && Array.isArray(value)) {
-        const nested = value.flatMap(v =>
-          this.buildWhereClauses(node, v as FilterQuery<T>),
-        );
+        const nested = value.flatMap((v) => this.buildWhereClauses(node, v as FilterQuery<T>));
         if (nested.length > 0) {
           const andClause = Cypher.and(...nested);
           if (andClause) {
@@ -774,9 +674,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
         return;
       }
       if (key === '$or' && Array.isArray(value)) {
-        const nested = value.flatMap(v =>
-          this.buildWhereClauses(node, v as FilterQuery<T>),
-        );
+        const nested = value.flatMap((v) => this.buildWhereClauses(node, v as FilterQuery<T>));
         if (nested.length > 0) {
           const orClause = Cypher.or(...nested);
           if (orClause) {
@@ -799,7 +697,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
 
     Object.entries(where).forEach(([key, value]) => {
       if (key === '$and' && Array.isArray(value)) {
-        const nested = value.flatMap(v =>
+        const nested = value.flatMap((v) =>
           this.buildRelationshipWhereClauses(rel, v as FilterQuery<T>),
         );
         if (nested.length > 0) {
@@ -811,7 +709,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
         return;
       }
       if (key === '$or' && Array.isArray(value)) {
-        const nested = value.flatMap(v =>
+        const nested = value.flatMap((v) =>
           this.buildRelationshipWhereClauses(rel, v as FilterQuery<T>),
         );
         if (nested.length > 0) {
@@ -824,11 +722,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       }
 
       // Handle operators
-      if (
-        typeof value === 'object' &&
-        value !== null &&
-        !Array.isArray(value)
-      ) {
+      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
         Object.entries(value).forEach(([op, opValue]) => {
           const prop = rel.property(key);
           switch (op) {
@@ -873,8 +767,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     const arr = Array.isArray(orderBy) ? orderBy : [orderBy];
     for (const item of arr) {
       Object.entries(item).forEach(([key, dir]) => {
-        const direction =
-          dir === 'ASC' || dir === 1 || dir === 'asc' ? 'ASC' : 'DESC';
+        const direction = dir === 'ASC' || dir === 1 || dir === 'asc' ? 'ASC' : 'DESC';
         parts.push([rel.property(key as string), direction]);
       });
     }
@@ -940,21 +833,17 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
         continue;
       }
 
-      if (
-        prop.kind === ReferenceKind.MANY_TO_ONE ||
-        prop.kind === ReferenceKind.ONE_TO_ONE
-      ) {
+      if (prop.kind === ReferenceKind.MANY_TO_ONE || prop.kind === ReferenceKind.ONE_TO_ONE) {
         const val = (data as Dictionary)[prop.name];
         if (val !== undefined) {
           nodeProps[prop.name] =
             typeof val === 'object' && val !== null
-              ? (val as any)[prop.targetMeta!.primaryKeys[0]] ?? val
+              ? ((val as any)[prop.targetMeta!.primaryKeys[0]] ?? val)
               : val;
           // Get relationship metadata from WeakMap or fallback to custom property
           const relMetadata = getRelationshipMetadata(meta.class, prop.name);
           const relationship =
-            relMetadata ??
-            ((prop as any).custom?.relationship as RelationshipOptions);
+            relMetadata ?? ((prop as any).custom?.relationship as RelationshipOptions);
           const relType = relationship?.type ?? prop.name.toUpperCase();
           relations.push({
             prop,
@@ -970,12 +859,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       if (prop.kind === ReferenceKind.MANY_TO_MANY) {
         const val = (data as Dictionary)[prop.name];
         // Handle both arrays and Collections
-        const items =
-          val instanceof Collection
-            ? val.getItems()
-            : Array.isArray(val)
-            ? val
-            : [];
+        const items = val instanceof Collection ? val.getItems() : Array.isArray(val) ? val : [];
         if (items.length > 0) {
           // Get relationship metadata from WeakMap or fallback to custom property
           const relMetadata = getRelationshipMetadata(meta.class, prop.name);
@@ -988,7 +872,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
           items.forEach((item: any) => {
             const idVal =
               typeof item === 'object' && item !== null
-                ? item[prop.targetMeta!.primaryKeys[0]] ?? item
+                ? (item[prop.targetMeta!.primaryKeys[0]] ?? item)
                 : item;
             relations.push({
               prop,
@@ -1017,8 +901,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     options: NativeInsertUpdateOptions<T>,
   ): Promise<QueryResult<T>> {
     // A relationship entity connects two nodes and stores properties on the relationship
-    const [sourceProp, targetProp] =
-      Neo4jCypherBuilder.getRelationshipEntityEnds(meta);
+    const [sourceProp, targetProp] = Neo4jCypherBuilder.getRelationshipEntityEnds(meta);
     const sourceId =
       (data as any)[sourceProp.name]?.[sourceProp.targetMeta!.primaryKeys[0]] ??
       (data as any)[sourceProp.name];
@@ -1027,9 +910,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       (data as any)[targetProp.name];
 
     if (!sourceId || !targetId) {
-      throw new Error(
-        `Relationship entity ${meta.className} must have both source and target set`,
-      );
+      throw new Error(`Relationship entity ${meta.className} must have both source and target set`);
     }
 
     // Get relationship type from metadata or decorator
@@ -1081,9 +962,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       ),
     );
 
-    const mergePattern = new Cypher.Pattern(aNode)
-      .related(rel, { type: relType })
-      .to(bNode);
+    const mergePattern = new Cypher.Pattern(aNode).related(rel, { type: relType }).to(bNode);
 
     const query = matchQuery
       .merge(mergePattern)
@@ -1158,20 +1037,14 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       );
       createQuery = createQuery.merge(mergePattern).return(newRel);
 
-      const { cypher: createCypher, params: createParams } =
-        createQuery.build();
+      const { cypher: createCypher, params: createParams } = createQuery.build();
       await this.connection.executeRaw(createCypher, createParams, ctx);
     }
   }
 
   private convertNeo4jValue(value: any): any {
     // Convert Neo4j Integer objects to JavaScript numbers
-    if (
-      value &&
-      typeof value === 'object' &&
-      'low' in value &&
-      'high' in value
-    ) {
+    if (value && typeof value === 'object' && 'low' in value && 'high' in value) {
       return value.toNumber ? value.toNumber() : Number(value.low);
     }
     return value;
@@ -1185,14 +1058,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     return result;
   }
 
-  private transformResult<T extends object>(
-    meta: EntityMetadata<T>,
-    node: any,
-  ): QueryResult<T> {
-    return this.mapResult(
-      node as EntityDictionary<T>,
-      meta,
-    ) as unknown as QueryResult<T>;
+  private transformResult<T extends object>(meta: EntityMetadata<T>, node: any): QueryResult<T> {
+    return this.mapResult(node as EntityDictionary<T>, meta) as unknown as QueryResult<T>;
   }
-
 }

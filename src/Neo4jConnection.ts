@@ -26,15 +26,10 @@ export interface Neo4jTransactionContext extends Neo4jTx {
 }
 
 export class Neo4jConnection extends Connection {
-
   protected driver!: Driver;
   protected database?: string;
 
-  constructor(
-    config: Configuration,
-    options?: ConnectionOptions,
-    type: ConnectionType = 'write',
-  ) {
+  constructor(config: Configuration, options?: ConnectionOptions, type: ConnectionType = 'write') {
     super(config, options, type);
   }
 
@@ -75,8 +70,7 @@ export class Neo4jConnection extends Connection {
   }
 
   getSession(type: ConnectionType = 'write'): Session {
-    const mode: SessionMode =
-      type === 'read' ? neo4j.session.READ : neo4j.session.WRITE;
+    const mode: SessionMode = type === 'read' ? neo4j.session.READ : neo4j.session.WRITE;
     return this.driver.session({
       defaultAccessMode: mode,
       database: this.database,
@@ -86,11 +80,7 @@ export class Neo4jConnection extends Connection {
   /**
    * Execute a Cypher query and return raw Neo4j result
    */
-  async executeRaw(
-    cypher: string,
-    params: any = {},
-    ctx?: Transaction,
-  ): Promise<any> {
+  async executeRaw(cypher: string, params: any = {}, ctx?: Transaction): Promise<any> {
     const isWriteQuery = /(CREATE|MERGE|SET|DELETE|REMOVE)/i.test(cypher);
     const session = ctx
       ? (ctx as Neo4jTransactionContext)
@@ -103,7 +93,7 @@ export class Neo4jConnection extends Connection {
             (acc, cur, i) => ({ ...acc, [`p${i}`]: cur }),
             {} as Record<string, unknown>,
           )
-        : params ?? {};
+        : (params ?? {});
 
       // Convert all numeric parameters to Neo4j integers
       // Neo4j requires explicit Integer objects for LIMIT/SKIP and other integer values
@@ -231,11 +221,7 @@ export class Neo4jConnection extends Connection {
     database?: string;
   } {
     const base = super.getConnectionOptions();
-    const {
-      user = 'neo4j',
-      password = 'test',
-      database,
-    } = base as Neo4jConnectionOptions;
+    const { user = 'neo4j', password = 'test', database } = base as Neo4jConnectionOptions;
     return {
       ...base,
       url: this.getClientUrl(),
@@ -250,5 +236,4 @@ export class Neo4jConnection extends Connection {
     const url = this.config.getClientUrl();
     return url ?? this.getDefaultClientUrl();
   }
-
 }
