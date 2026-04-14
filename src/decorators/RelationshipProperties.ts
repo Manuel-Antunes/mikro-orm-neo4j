@@ -1,4 +1,5 @@
-import { type EntityOptions, MetadataStorage } from '@mikro-orm/core';
+import { type EntityOptions } from '@mikro-orm/core';
+import { getMetadataFromDecorator } from '../utils/getMetadataFromDecorator';
 
 export interface Neo4jRelationshipOptions extends EntityOptions<any> {
   /**
@@ -20,7 +21,7 @@ export interface Neo4jRelationshipOptions extends EntityOptions<any> {
 
 export const RelationshipProperties = (options?: Neo4jRelationshipOptions): ClassDecorator => {
   return function (target: any) {
-    const meta = MetadataStorage.getMetadataFromDecorator(target);
+    const meta = getMetadataFromDecorator(target);
     if (meta) {
       (meta as any).neo4jRelationshipEntity = true;
       (meta as any).neo4jRelationshipType = options?.type;

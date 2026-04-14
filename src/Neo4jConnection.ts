@@ -28,6 +28,7 @@ export interface Neo4jTransactionContext extends Neo4jTx {
 export class Neo4jConnection extends Connection {
   protected driver!: Driver;
   protected database?: string;
+  private connecting?: Promise<void>;
 
   constructor(config: Configuration, options?: ConnectionOptions, type: ConnectionType = 'write') {
     super(config, options, type);
@@ -44,6 +45,20 @@ export class Neo4jConnection extends Connection {
     await this.driver.getServerInfo();
   }
 
+  private async ensureConnected(): Promise<void> {
+    if (this.driver) {
+      return;
+    }
+
+    if (!this.connecting) {
+      this.connecting = this.connect().finally(() => {
+        this.connecting = undefined;
+      });
+    }
+
+    await this.connecting;
+  }
+
   override async checkConnection(): Promise<
     { ok: true } | { ok: false; reason: string; error?: Error }
   > {
@@ -57,10 +72,18 @@ export class Neo4jConnection extends Connection {
 
   override async close(force?: boolean): Promise<void> {
     void force;
+    if (!this.driver) {
+      return;
+    }
     await this.driver.close();
+    this.driver = undefined as unknown as Driver;
   }
 
   async isConnected(): Promise<boolean> {
+    if (!this.driver) {
+      return false;
+    }
+
     try {
       await this.driver.getServerInfo();
       return true;
@@ -70,6 +93,10 @@ export class Neo4jConnection extends Connection {
   }
 
   getSession(type: ConnectionType = 'write'): Session {
+    if (!this.driver) {
+      throw new Error('Neo4j driver is not connected.');
+    }
+
     const mode: SessionMode = type === 'read' ? neo4j.session.READ : neo4j.session.WRITE;
     return this.driver.session({
       defaultAccessMode: mode,
@@ -81,6 +108,8 @@ export class Neo4jConnection extends Connection {
    * Execute a Cypher query and return raw Neo4j result
    */
   async executeRaw(cypher: string, params: any = {}, ctx?: Transaction): Promise<any> {
+    await this.ensureConnected();
+
     const isWriteQuery = /(CREATE|MERGE|SET|DELETE|REMOVE)/i.test(cypher);
     const session = ctx
       ? (ctx as Neo4jTransactionContext)
@@ -136,6 +165,8 @@ export class Neo4jConnection extends Connection {
     cb: (trx: Neo4jTransactionContext) => Promise<T>,
     options?: { ctx?: Neo4jTransactionContext; eventBroadcaster?: any },
   ): Promise<T> {
+    await this.ensureConnected();
+
     const ctx = options?.ctx;
     if (ctx) {
       // Nested transaction - reuse existing context
@@ -162,6 +193,8 @@ export class Neo4jConnection extends Connection {
     ctx?: Neo4jTransactionContext;
     eventBroadcaster?: any;
   }): Promise<Neo4jTransactionContext> {
+    await this.ensureConnected();
+
     const ctx = options?.ctx as Neo4jTransactionContext;
     if (ctx) {
       // Nested transaction support - Neo4j doesn't support savepoints, but we can reuse existing transaction
@@ -195,6 +228,8 @@ export class Neo4jConnection extends Connection {
     cb: (tx: Neo4jTx) => Promise<T>,
     type: ConnectionType = 'write',
   ): Promise<T> {
+    await this.ensureConnected();
+
     const session = this.getSession(type);
     const tx = session.beginTransaction();
     try {
@@ -232,8 +267,10 @@ export class Neo4jConnection extends Connection {
     };
   }
 
-  override getClientUrl(): string {
-    const url = this.config.getClientUrl();
+  getClientUrl(): string {
+    const url =
+      (this.options as Neo4jConnectionOptions).clientUrl ??
+      this.config.get('clientUrl', this.getDefaultClientUrl());
     return url ?? this.getDefaultClientUrl();
   }
 }

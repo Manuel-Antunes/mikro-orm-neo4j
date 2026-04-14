@@ -48,8 +48,9 @@
   "devDependencies": {
     "@commitlint/cli": "^19.7.1",
     "@commitlint/config-conventional": "^19.7.1",
-    "@mikro-orm/core": "^6.6.13",
-    "@mikro-orm/reflection": "^6.6.13",
+    "@mikro-orm/core": "^7.0.2",
+    "@mikro-orm/decorators": "^7.0.2",
+    "@mikro-orm/reflection": "^7.0.2",
     "@types/node": "^22.13.5",
     "@typescript-eslint/eslint-plugin": "^8.21.0",
     "@typescript-eslint/parser": "^8.21.0",
@@ -67,7 +68,7 @@
     "vitest": "^3.0.0"
   },
   "peerDependencies": {
-    "@mikro-orm/core": "^6.0.0"
+    "@mikro-orm/core": "^7.0.2"
   },
   "engines": {
     "node": ">=18.0.0",

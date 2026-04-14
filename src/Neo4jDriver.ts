@@ -14,12 +14,12 @@ import {
   type EntityProperty,
   type FindOneOptions,
   type FindOptions,
-  type IDatabaseDriver,
   type NativeInsertUpdateManyOptions,
   type NativeInsertUpdateOptions,
   type QueryResult,
   type FilterQuery,
   type QueryOrderMap,
+  type StreamOptions,
   type Transaction,
   ReferenceKind,
   type AnyEntity,
@@ -51,24 +51,22 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     super(config, ['neo4j-driver']);
   }
 
-  override createEntityManager<D extends IDatabaseDriver = IDatabaseDriver>(
-    useContext?: boolean,
-  ): D[typeof EntityManagerType] {
-    return new Neo4jEntityManager(
+  override createEntityManager(useContext?: boolean): this[typeof EntityManagerType] {
+    return new Neo4jEntityManager<this>(
       this.config,
       this,
       this.metadata,
       useContext,
-    ) as unknown as D[typeof EntityManagerType];
+    ) as this[typeof EntityManagerType];
   }
 
   override async find<
     T extends object,
     P extends string = never,
-    F extends string = '*',
+    F extends string = never,
     E extends string = never,
   >(
-    entityName: string,
+    entityName: EntityName<T>,
     where: FilterQuery<T>,
     options: FindOptions<T, P, F, E> = {},
   ): Promise<EntityData<T>[]> {
@@ -102,10 +100,10 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
   override async findOne<
     T extends object,
     P extends string = never,
-    F extends string = '*',
+    F extends string = never,
     E extends string = never,
   >(
-    entityName: string,
+    entityName: EntityName<T>,
     where: FilterQuery<T>,
     options: FindOneOptions<T, P, F, E> = { populate: [], orderBy: {} },
   ): Promise<EntityData<T> | null> {
@@ -135,7 +133,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
   }
 
   override async count<T extends object>(
-    entityName: string,
+    entityName: EntityName<T>,
     where: FilterQuery<T>,
     options: CountOptions<T> = {},
   ): Promise<number> {
@@ -163,7 +161,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
   }
 
   override async nativeInsert<T extends object>(
-    entityName: string,
+    entityName: EntityName<T>,
     data: EntityDictionary<T>,
     options: NativeInsertUpdateOptions<T> = {},
   ): Promise<QueryResult<T>> {
@@ -194,7 +192,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
   }
 
   override async nativeInsertMany<T extends object>(
-    entityName: string,
+    entityName: EntityName<T>,
     data: EntityDictionary<T>[],
     options: NativeInsertUpdateManyOptions<T> = {},
   ): Promise<QueryResult<T>> {
@@ -211,7 +209,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
   }
 
   override async nativeUpdate<T extends object>(
-    entityName: string,
+    entityName: EntityName<T>,
     where: FilterQuery<T>,
     data: EntityDictionary<T>,
     options: NativeInsertUpdateOptions<T> = {},
@@ -252,7 +250,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
   }
 
   override async nativeUpdateMany<T extends object>(
-    entityName: string,
+    entityName: EntityName<T>,
     where: FilterQuery<T>[],
     data: EntityDictionary<T>[],
     options: NativeInsertUpdateManyOptions<T> = {},
@@ -272,7 +270,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
   }
 
   override async nativeDelete<T extends object>(
-    entityName: string,
+    entityName: EntityName<T>,
     where: FilterQuery<T>,
     options: DeleteOptions<T> = {},
   ): Promise<QueryResult<T>> {
@@ -297,14 +295,15 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     } as any;
   }
 
-  override async aggregate(entityName: string, pipeline: any[]): Promise<any[]> {
+  override async aggregate(entityName: EntityName, pipeline: any[]): Promise<any[]> {
+    void entityName;
     const cypher = pipeline.join('\n');
     const res = await this.connection.executeRaw(cypher, {});
     return res.records.map((r: any) => this.convertNeo4jRecord(r.toObject()));
   }
 
   override async findVirtual<T extends object>(
-    entityName: string,
+    entityName: EntityName<T>,
     where: FilterQuery<T>,
     options: FindOptions<T, any, any, any>,
   ): Promise<EntityData<T>[]> {
@@ -328,6 +327,17 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       const converted = this.convertNeo4jRecord(obj);
       return this.mapResult(converted, meta) as EntityData<T>;
     });
+  }
+
+  override async *stream<T extends object>(
+    entityName: EntityName<T>,
+    where: FilterQuery<T>,
+    options: StreamOptions<T>,
+  ): AsyncIterableIterator<T> {
+    const rows = await this.find(entityName, where, options as any);
+    for (const row of rows) {
+      yield row as unknown as T;
+    }
   }
 
   override async connect(): Promise<Neo4jConnection> {
@@ -683,6 +693,49 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
         }
         return;
       }
+
+      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        const prop = node.property(key);
+        let appliedOperator = false;
+
+        Object.entries(value as Dictionary).forEach(([op, opValue]) => {
+          switch (op) {
+            case '$eq':
+              clauses.push(Cypher.eq(prop, new Cypher.Param(opValue)));
+              appliedOperator = true;
+              break;
+            case '$ne':
+              clauses.push(Cypher.neq(prop, new Cypher.Param(opValue)));
+              appliedOperator = true;
+              break;
+            case '$gt':
+              clauses.push(Cypher.gt(prop, new Cypher.Param(opValue)));
+              appliedOperator = true;
+              break;
+            case '$gte':
+              clauses.push(Cypher.gte(prop, new Cypher.Param(opValue)));
+              appliedOperator = true;
+              break;
+            case '$lt':
+              clauses.push(Cypher.lt(prop, new Cypher.Param(opValue)));
+              appliedOperator = true;
+              break;
+            case '$lte':
+              clauses.push(Cypher.lte(prop, new Cypher.Param(opValue)));
+              appliedOperator = true;
+              break;
+            default:
+              break;
+          }
+        });
+
+        if (!appliedOperator) {
+          clauses.push(Cypher.eq(prop, new Cypher.Param(value)));
+        }
+
+        return;
+      }
+
       clauses.push(Cypher.eq(node.property(key), new Cypher.Param(value)));
     });
 

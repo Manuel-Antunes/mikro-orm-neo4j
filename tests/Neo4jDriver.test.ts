@@ -1,16 +1,18 @@
 import crypto from 'node:crypto';
 import {
   Collection,
+  Ref,
+  type EntityManager,
+  Reference,
+} from '@mikro-orm/core';
+import {
   Entity,
   ManyToOne,
   OneToMany,
   ManyToMany,
   PrimaryKey,
   Property,
-  Ref,
-  type EntityManager,
-  Reference,
-} from '@mikro-orm/core';
+} from '@mikro-orm/decorators/legacy';
 import { TsMorphMetadataProvider } from '@mikro-orm/reflection';
 import { MikroORM, Node, Rel, RelationshipProperties } from '@mikro-orm/neo4j';
 import {

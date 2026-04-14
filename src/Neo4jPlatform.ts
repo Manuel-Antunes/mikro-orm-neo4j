@@ -60,11 +60,11 @@ export class Neo4jPlatform extends Platform {
     return data;
   }
 
-  override getSerializedPrimaryKeyField(field: string): string {
+  getSerializedPrimaryKeyField(field: string): string {
     return 'id';
   }
 
-  override usesDifferentSerializedPrimaryKey(): boolean {
+  usesDifferentSerializedPrimaryKey(): boolean {
     return false;
   }
 

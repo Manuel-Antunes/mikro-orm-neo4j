@@ -1,8 +1,10 @@
 import {
+  type AnyEntity,
   EntityManager,
   type EntityName,
   type EntityRepository,
   type GetRepository,
+  type Ref,
   type TransactionOptions,
 } from '@mikro-orm/core';
 import type { Neo4jDriver } from './Neo4jDriver';
@@ -28,6 +30,20 @@ export class Neo4jEntityManager<
     options: TransactionOptions = {},
   ): Promise<T> {
     return super.transactional(cb, options);
+  }
+
+  async persistAndFlush(
+    entity: AnyEntity | Ref<AnyEntity> | Iterable<AnyEntity | Ref<AnyEntity>>,
+  ): Promise<void> {
+    this.persist(entity as any);
+    await this.flush();
+  }
+
+  async removeAndFlush(
+    entity: AnyEntity | Ref<AnyEntity> | Iterable<AnyEntity | Ref<AnyEntity>>,
+  ): Promise<void> {
+    this.remove(entity as any);
+    await this.flush();
   }
 
   async run<T = any>(cypher: string, params?: Record<string, unknown>): Promise<T[]> {

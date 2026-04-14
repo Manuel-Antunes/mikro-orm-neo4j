@@ -1,4 +1,4 @@
-import { MetadataStorage } from '@mikro-orm/core';
+import { getMetadataFromDecorator } from '../utils/getMetadataFromDecorator';
 
 export interface Neo4jNodeOptions {
   /**
@@ -26,7 +26,7 @@ export interface Neo4jNodeOptions {
 
 export const Node = (options?: Neo4jNodeOptions): ClassDecorator => {
   return function (target: any) {
-    const meta = MetadataStorage.getMetadataFromDecorator(target);
+    const meta = getMetadataFromDecorator(target);
     if (meta) {
       (meta as any).neo4jNode = true;
       if (options?.labels) {
