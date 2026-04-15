@@ -10,6 +10,7 @@ import {
 import type { Neo4jDriver } from './Neo4jDriver';
 import type { Neo4jEntityRepository } from './Neo4jEntityRepository';
 import { Neo4jQueryBuilder } from './Neo4jQueryBuilder';
+import { Neo4jCypherUtils } from './Neo4jCypherUtils';
 
 export class Neo4jEntityManager<
   Driver extends Neo4jDriver = Neo4jDriver,
@@ -53,30 +54,10 @@ export class Neo4jEntityManager<
       const converted: any = {};
       for (const key of r.keys) {
         const value = r.get(key);
-        converted[key] = this.convertNeo4jValue(value);
+        converted[key] = Neo4jCypherUtils.convertNeo4jValue(value);
       }
       return converted as T;
     });
-  }
-
-  private convertNeo4jValue(value: any): any {
-    // Handle Neo4j Integer objects
-    if (value && typeof value === 'object' && 'low' in value && 'high' in value) {
-      return value.toNumber ? value.toNumber() : Number(value.low);
-    }
-    // Handle arrays recursively
-    if (Array.isArray(value)) {
-      return value.map((v) => this.convertNeo4jValue(v));
-    }
-    // Handle objects recursively
-    if (value && typeof value === 'object' && value.constructor === Object) {
-      const converted: any = {};
-      for (const key in value) {
-        converted[key] = this.convertNeo4jValue(value[key]);
-      }
-      return converted;
-    }
-    return value;
   }
 
   async aggregate<T = any>(cypher: string, params?: Record<string, unknown>): Promise<T[]> {

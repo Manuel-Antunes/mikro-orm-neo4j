@@ -1,10 +1,13 @@
 import * as Cypher from '@neo4j/cypher-builder';
-import type { EntityName, EntityClass } from '@mikro-orm/core';
+import type { EntityName, EntityClass, FilterQuery } from '@mikro-orm/core';
 import type { Neo4jEntityManager } from './Neo4jEntityManager';
 import { Neo4jCypherBuilder } from './Neo4jCypherBuilder';
+import { Neo4jCypherUtils } from './Neo4jCypherUtils';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface QueryBuilderResult<T = any> {
   cypher: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   params: Record<string, any>;
   execute?: () => Promise<T[]>;
 }
@@ -13,8 +16,10 @@ export interface RelationshipOptions {
   direction?: 'left' | 'right' | 'undirected';
   targetLabel?: string;
   targetLabels?: string[];
-  /** Target entity class - will extract labels from @Node decorator */
+  /** Target entity class - will extract labels from entity metadata */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   targetEntity?: EntityClass<any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   properties?: Record<string, any>;
   variable?: Cypher.Relationship;
   length?: number | { min?: number; max?: number } | '*';
@@ -83,8 +88,21 @@ export class Neo4jQueryBuilder<T = any> {
 
     // Extract labels from entity name if provided
     if (entityName) {
-      const labelString = typeof entityName === 'string' ? entityName : (entityName.name as string);
-      this.labels = [labelString];
+      if (em) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const meta = em.getMetadata().find(entityName as any);
+        if (meta) {
+          // Use getNodeLabels which reads collection + custom.labels
+          this.labels = Neo4jCypherBuilder.getNodeLabels(meta);
+        }
+      }
+
+      // Fallback when no EM or meta is available
+      if (!this.labels) {
+        const labelString =
+          typeof entityName === 'string' ? entityName : (entityName.name as string);
+        this.labels = [labelString];
+      }
     }
   }
 
@@ -220,6 +238,31 @@ export class Neo4jQueryBuilder<T = any> {
 
     const orPredicate = Cypher.or(...predicates);
     this.wherePredicates.push(orPredicate);
+    return this;
+  }
+
+  /**
+   * Adds WHERE conditions using MikroORM-style FilterQuery syntax.
+   * This allows using the same filter format as `em.find()` in the QueryBuilder.
+   *
+   * Supports operators: `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$and`, `$or`.
+   *
+   * @param filter - MikroORM-style filter query object
+   * @example
+   * ```typescript
+   * // Simple equality
+   * qb.match().whereFilter({ title: 'The Matrix' })
+   *
+   * // With operators
+   * qb.match().whereFilter({ released: { $gte: 2000 }, title: 'Inception' })
+   *
+   * // With $or
+   * qb.match().whereFilter({ $or: [{ title: 'The Matrix' }, { title: 'Inception' }] })
+   * ```
+   */
+  whereFilter<Entity extends object = any>(filter: FilterQuery<Entity>): this {
+    const predicates = Neo4jCypherUtils.buildWhereClauses(this.node, filter);
+    this.wherePredicates.push(...predicates);
     return this;
   }
 
@@ -391,7 +434,7 @@ export class Neo4jQueryBuilder<T = any> {
     relationshipTypeOrProperty: string | EntityClass<any>,
     optionsOrDirection?: RelationshipOptions | 'left' | 'right' | 'none' | string,
     targetLabelOrEntity?: string | EntityClass<any>,
-    relationshipAlias?: string,
+    _relationshipAlias?: string,
   ): this {
     if (!this._pattern) {
       this._pattern = new Cypher.Pattern(this.node, { labels: this.labels });
@@ -399,6 +442,17 @@ export class Neo4jQueryBuilder<T = any> {
 
     let relationshipType: string;
     let opts: RelationshipOptions;
+
+    // Normalize defineEntity schema objects: { class: Constructor, meta: ... } → class constructor
+    if (
+      typeof relationshipTypeOrProperty === 'object' &&
+      relationshipTypeOrProperty !== null &&
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      typeof (relationshipTypeOrProperty as any).class === 'function'
+    ) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      relationshipTypeOrProperty = (relationshipTypeOrProperty as any).class as EntityClass<any>;
+    }
 
     // Handle entity-based signature: related(EntityClass, 'propertyName')
     // OR related(RelationshipEntityClass, options)
@@ -432,19 +486,38 @@ export class Neo4jQueryBuilder<T = any> {
         const sourceEntity = relationshipTypeOrProperty;
         const propertyName = optionsOrDirection as string;
 
-        // Extract relationship type and direction from decorator metadata
-        const relType = Neo4jCypherBuilder.getRelationshipType(sourceEntity, propertyName, false);
+        // First try to get from entity metadata (property.custom)
+        let relType: string | undefined;
+        let cypherDirection: 'left' | 'right' | undefined;
+
+        if (this.em) {
+          const sourceMeta = this.em.getMetadata().find(sourceEntity as any);
+          const prop = sourceMeta?.properties[propertyName];
+          if (prop) {
+            const propCustom = (prop as any).relation;
+            if (propCustom?.type) {
+              relType = propCustom.type;
+            } else if (propCustom?.relType) {
+              relType = propCustom.relType;
+            }
+            if (propCustom?.direction) {
+              cypherDirection = propCustom.direction === 'IN' ? 'left' : 'right';
+            }
+          }
+        }
+
+        // Fallback to getRelationshipType (may read from old @Rel store if still present)
+        if (!relType) {
+          relType = Neo4jCypherBuilder.getRelationshipType(sourceEntity, propertyName, false);
+        }
+
         if (!relType) {
           throw new Error(
-            `No @Rel decorator found on ${sourceEntity.name}.${propertyName}. ` +
-              `Please use @Rel() decorator to specify relationship metadata.`,
+            `No relationship metadata found on ${(sourceEntity as any).name}.${propertyName}. ` +
+              `Please use 'relation: { type, direction }' in your decorator options.`,
           );
         }
         relationshipType = relType;
-
-        const direction = Neo4jCypherBuilder.convertDirection(
-          Neo4jCypherBuilder.getRelationshipDirection(sourceEntity, propertyName),
-        );
 
         // Get target entity from metadata if available
         let targetEntity: EntityClass<any> | undefined;
@@ -457,7 +530,7 @@ export class Neo4jQueryBuilder<T = any> {
         }
 
         opts = {
-          direction,
+          direction: cypherDirection,
           targetEntity:
             targetLabelOrEntity && typeof targetLabelOrEntity !== 'string'
               ? (targetLabelOrEntity as EntityClass<any>)

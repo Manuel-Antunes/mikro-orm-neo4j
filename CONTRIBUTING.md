@@ -1,26 +1,37 @@
-# Contributing to nestjs-query-mikro-orm
+# Contributing to @mikro-orm/neo4j
 
-Thank you for your interest in contributing to nestjs-query-mikro-orm! This document provides guidelines and instructions for contributing.
+Thank you for considering contributing to the `mikro-orm-neo4j` driver! We appreciate your help in making this project better.
 
 ## Getting Started
 
-1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/nestjs-query-mikro-orm.git`
-3. Create a new branch: `git checkout -b feature/your-feature-name`
-4. Install dependencies: `pnpm install`
-5. Setup git hooks: `pnpm prepare`
+1. **Fork the repository** on GitHub.
+2. **Clone your fork**:
+   ```bash
+   git clone https://github.com/YOUR_USERNAME/mikro-orm-neo4j.git
+   cd mikro-orm-neo4j
+   ```
+3. **Create a new branch** for your feature or fix:
+   ```bash
+   git checkout -b feature/amazing-feature
+   ```
+4. **Install dependencies**. We use `pnpm` as our package manager:
+   ```bash
+   pnpm install
+   ```
 
 ## Development Workflow
 
 ### Making Changes
 
-1. Make your changes in the `src/` directory
-2. Add or update tests in `__tests__/` as needed
-3. Run tests to ensure everything works: `pnpm test`
-4. Run linting and formatting: `pnpm lint` and `pnpm format`
-5. Build the project: `pnpm build`
+- The driver's source code is located in the `src/` directory.
+- Test files are located in the `tests/` directory.
+- This codebase is strongly typed. Ensure your changes compile strictly without type errors.
 
-### Running Tests
+### Testing
+
+This project has a comprehensive test suite using `vitest` covering unit tests, query builder tests, and full DB execution contexts using testcontainers.
+
+In order to run the integration tests properly, ensure you have **Docker running** on your machine (to spin up `testcontainers` for Neo4j instance simulation).
 
 ```bash
 # Run all tests
@@ -29,93 +40,67 @@ pnpm test
 # Run tests in watch mode
 pnpm test:watch
 
-# Run tests with coverage
-pnpm test:coverage
+# View detailed test outputs
+pnpm test --reporter=verbose
 ```
 
-### Code Quality
+### Code Quality and Tooling
 
-Before committing, make sure your code passes all checks:
+Before pushing your code, please run the following commands to ensure everything is aligned with the project's standards:
 
 ```bash
+# Check TypeScript types
+pnpm typecheck
+
 # Lint your code
 pnpm lint
 
 # Fix linting issues automatically
 pnpm lint:fix
 
-# Check TypeScript types
-pnpm typecheck
-
-# Format your code
+# Format your code using Prettier
 pnpm format
+
+# Build the project to ensure both ESM and CJS bundles succeed
+pnpm build
 ```
 
 ## Commit Guidelines
 
-This project follows [Conventional Commits](https://www.conventionalcommits.org/). Your commit messages should be structured as follows:
+This project uses [Conventional Commits](https://www.conventionalcommits.org/). Please format your commit messages appropriately:
 
 ```
 <type>(<scope>): <subject>
-
-<body>
-
-<footer>
 ```
 
-### Types
-
+**Types:**
 - `feat`: A new feature
 - `fix`: A bug fix
 - `docs`: Documentation only changes
-- `style`: Changes that don't affect code meaning (white-space, formatting, etc)
+- `style`: Code style/formatting changes
 - `refactor`: Code change that neither fixes a bug nor adds a feature
-- `perf`: Code change that improves performance
 - `test`: Adding missing tests or correcting existing tests
 - `chore`: Changes to the build process or auxiliary tools
 
-### Examples
-
+**Example:**
 ```
-feat(query): add support for complex aggregations
-
-fix(filter): handle null values in date filters correctly
-
-docs: update README with new examples
-
-test(services): add tests for relation query service
+feat(query-builder): implement support for EXISTS subqueries
+fix(driver): correct parameter mapping for relationship properties
 ```
 
 ## Pull Request Process
 
-1. Update the README.md with details of changes if applicable
-2. Update tests to cover your changes
-3. Ensure all tests pass and code quality checks succeed
-4. Update the CHANGELOG.md if it's a significant change
-5. The PR will be merged once you have the sign-off of at least one maintainer
-
-## Code Style
-
-- Use TypeScript for all code
-- Follow the existing code style (enforced by ESLint and Prettier)
-- Write clear, self-documenting code
-- Add JSDoc comments for public APIs
-- Keep functions small and focused
-- Write meaningful variable and function names
-
-## Testing Guidelines
-
-- Write tests for all new features
-- Ensure existing tests still pass
-- Aim for high code coverage
-- Use descriptive test names
-- Follow the AAA pattern (Arrange, Act, Assert)
+1. Ensure your branch is rebased against the `main` branch.
+2. Run `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build` locally. Address any failures before pushing.
+3. Push your feature branch to your GitHub fork.
+4. Open a Pull Request toward the main repository.
+5. Provide a clear description of the problem solved or feature added. Link to any relevant open issues.
+6. A maintainer will review your Pull Request. Address any requested changes or feedback.
 
 ## Questions?
 
-If you have questions, feel free to:
-
-- Open an issue for discussion
-- Reach out to the maintainers
+If you encounter any issues or have questions regarding architecture or feature proposals:
+- Open an issue for discussion.
+- Reach out with your ideas before writing massive amounts of code.
 
 Thank you for contributing! 🎉

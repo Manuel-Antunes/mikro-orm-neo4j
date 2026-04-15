@@ -22,7 +22,7 @@ export class Neo4jPlatform extends Platform {
     return true;
   }
 
-  override getRepositoryClass<T extends object>(): Constructor<any> {
+  override getRepositoryClass<_T extends object>(): Constructor<any> {
     return Neo4jEntityRepository as unknown as Constructor<any>;
   }
 
@@ -60,7 +60,7 @@ export class Neo4jPlatform extends Platform {
     return data;
   }
 
-  getSerializedPrimaryKeyField(field: string): string {
+  getSerializedPrimaryKeyField(_field: string): string {
     return 'id';
   }
 

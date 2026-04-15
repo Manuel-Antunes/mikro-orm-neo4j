@@ -1,174 +1,239 @@
-# nestjs-query-mikro-orm
+# @mikro-orm/neo4j
 
-A [NestJS Query](https://github.com/tripss/nestjs-query) adapter for [MikroORM](https://mikro-orm.io/).
+[![NPM Version](https://img.shields.io/npm/v/@mikro-orm/neo4j.svg)](https://npmjs.com/package/@mikro-orm/neo4j)
+[![License](https://img.shields.io/npm/l/@mikro-orm/neo4j.svg)](https://github.com/mikro-orm/mikro-orm/blob/master/LICENSE)
 
-This library provides a seamless integration between NestJS Query and MikroORM, allowing you to build powerful GraphQL APIs with minimal boilerplate.
+A native Neo4j driver for [MikroORM](https://mikro-orm.io/).
+
+This package provides seamless integration between MikroORM and Neo4j, enabling graph-native operations, complex Cypher query building, and advanced graph data modeling (such as relationship properties) while keeping the familiar MikroORM API.
 
 ## Features
 
-- 🚀 Full NestJS Query support with MikroORM
-- 📦 Type-safe query building
-- 🔍 Advanced filtering and sorting
-- 🔗 Relation query support
-- 📊 Aggregation queries
-- 🎯 Soft delete support
-- ✨ Built with TypeScript
-- 📦 Dual-format support (ESM & CommonJS)
-
-## Compatibility
-
-This package supports both **ES Modules (ESM)** and **CommonJS (CJS)** for maximum compatibility across different Node.js environments and bundlers.
-
-- **ESM**: `import { MikroOrmQueryService } from 'nestjs-query-mikro-orm'`
-- **CommonJS**: `const { MikroOrmQueryService } = require('nestjs-query-mikro-orm')`
-
-The package automatically detects the import method and serves the appropriate format.
+- 🚀 Full MikroORM `EntityManager` and `EntityRepository` support
+- 🕸️ **Graph-native relationships**: Support for proper directed relationships in Neo4j (`IN`, `OUT`).
+- 💎 **Relationship Properties (Pivot Entities)**: Model complex graph relationships natively.
+- 🏗️ **Neo4jQueryBuilder**: Fluent API wrapping `@neo4j/cypher-builder` to write raw Cypher natively with ORM parameter injection, pattern matching, and relationship navigation (`.related()`).
+- 🏷️ **Polymorphic Queries**: Support for multi-label inheritance and querying.
+- 🧩 **Native Decorator Extensions**: Fully type-safe strongly-defined `neo4j` and `relation` configuration parameters integrated cleanly inside MikroORM properties via declaration merging.
+- 📦 Dual-format support (ESM & CommonJS).
 
 ## Installation
 
 ```bash
-pnpm add nestjs-query-mikro-orm
-
-# Install peer dependencies if you haven't already
-pnpm add @mikro-orm/core @nestjs/common @nestjs/core @nestjs-query/core reflect-metadata rxjs
+pnpm add @mikro-orm/neo4j neo4j-driver
+pnpm add -D @mikro-orm/core @mikro-orm/reflection
 ```
 
 ## Quick Start
 
-### 1. Setup MikroORM Module
+### 1. Initialize the ORM
+
+Create your MikroORM instance using the Neo4j driver:
 
 ```typescript
-import { NestQueryMikroOrmModule } from 'nestjs-query-mikro-orm';
-import { Module } from '@nestjs/common';
-import { UserEntity } from './user.entity';
+import { MikroORM } from '@mikro-orm/neo4j';
+import { TsMorphMetadataProvider } from '@mikro-orm/reflection';
 
-@Module({
-  imports: [NestQueryMikroOrmModule.forFeature([UserEntity])],
-})
-export class UserModule {}
+const orm = await MikroORM.init({
+  clientUrl: 'bolt://localhost:7687', // Your Neo4j URI
+  user: 'neo4j',
+  password: 'password',
+  entities: ['./dist/entities'],
+  entitiesTs: ['./src/entities'],
+  metadataProvider: TsMorphMetadataProvider,
+});
+
+const em = orm.em;
 ```
 
-### 2. Create Your Entity
+### 2. Define Entities natively
+
+You can build entities normally by tapping into the native extension properties **`relation`** inside `@ManyToOne`/`@ManyToMany` decorators, and **`neo4j`** inside `@Entity()` decorators. 
+
+#### Setting up TypeScript Typings
+
+Because `mikro-orm-neo4j` uses global declaration merging to augment `@mikro-orm/core`, you get autocomplete natively without requiring any `as any` casts! To ensure your TypeScript compiler (`tsc`) correctly registers these definitions in your project, simply add `@mikro-orm/neo4j/types` to your `tsconfig.json` compiler options, or add a triple-slash reference in your `global.d.ts`:
+
+```json
+// tsconfig.json
+{
+  "compilerOptions": {
+    "types": [
+      "node",
+      "@mikro-orm/neo4j/types"
+    ]
+  }
+}
+```
+
+Or programmatically in any entry file:
+```typescript
+/// <reference types="@mikro-orm/neo4j/types" />
+```
+
+Once the types are recognized by your IDE, you can construct perfectly valid MikroORM entities like this:
 
 ```typescript
-import { Entity, PrimaryKey, Property } from '@mikro-orm/core';
+import { Entity, PrimaryKey, Property, ManyToOne, Collection, OneToMany } from '@mikro-orm/core';
 
-@Entity()
-export class UserEntity {
+@Entity({ neo4j: { labels: ['User', 'Person'] } })
+export class User {
   @PrimaryKey()
-  id!: number;
+  id!: string;
 
   @Property()
   name!: string;
 
-  @Property()
-  email!: string;
+  @OneToMany(() => Post, post => post.author)
+  posts = new Collection<Post>(this);
+}
+
+@Entity()
+export class Post {
+  @PrimaryKey()
+  id!: string;
 
   @Property()
-  createdAt: Date = new Date();
+  title!: string;
+
+  // Utilize the natively-augmented relation object to denote Neo4j specifics
+  @ManyToOne(() => User, { relation: { type: 'CREATED', direction: 'IN' } })
+  author!: User;
 }
 ```
 
-### 3. Use the Query Service
+### 3. Relationship Properties (Pivot Entities)
+
+In Neo4j, relationships can have their own properties. You can model this using a standard `@Entity()` configured as a `relationshipEntity`.
 
 ```typescript
-import { Injectable } from '@nestjs/common';
-import { MikroOrmQueryService } from 'nestjs-query-mikro-orm';
-import { UserEntity } from './user.entity';
+import { Entity, PrimaryKey, Property, ManyToOne, Collection, ManyToMany } from '@mikro-orm/core';
 
-@Injectable()
-export class UserService extends MikroOrmQueryService<UserEntity> {
-  // Your custom methods here
+@Entity()
+export class Actor {
+  @PrimaryKey()
+  id!: string;
+
+  @Property()
+  name!: string;
+  
+  @ManyToMany(() => Movie, undefined, {
+    pivotEntity: () => ActedIn,
+    inversedBy: 'actors',
+    relation: { type: 'ACTED_IN', direction: 'OUT' }
+  })
+  movies = new Collection<Movie>(this);
+}
+
+@Entity()
+export class Movie {
+  @PrimaryKey()
+  id!: string;
+
+  @Property()
+  title!: string;
+}
+
+// Mark this entity as a Neo4j Relationship instead of a Node!
+@Entity({ neo4j: { relationshipEntity: true, type: 'ACTED_IN' } })
+export class ActedIn {
+  @PrimaryKey()
+  id!: string;
+
+  @ManyToOne(() => Actor, { primary: true })
+  actor!: Actor;
+
+  @ManyToOne(() => Movie, { primary: true })
+  movie!: Movie;
+
+  @Property()
+  roles!: string[]; // Relationship property stored inside Neo4j relation data!
 }
 ```
 
-## Development
+> [!TIP]
+> **Why `relation` instead of custom decorators like `@Rel`?**
+> Relying on MikroORM's built-in `PropertyOptions` ensures better compatibility with the internal lifecycle hook systems and removes the buggy reflection extraction complexities of scanning custom external decorators during schema generation.
 
-### Prerequisites
+### 4. Constructing Complex Cypher Queries (`Neo4jQueryBuilder`)
 
-- Node.js >= 18
-- pnpm >= 9
+The custom `Neo4jQueryBuilder` extends MikroORM principles and seamlessly bridges them to robust graph traversal queries via Cypher. 
 
-### Setup
+Here are some comprehensive examples:
 
-```bash
-# Install dependencies
-pnpm install
+#### Filtering & Relation traversal with `match` and `related`
 
-# Setup git hooks
-pnpm prepare
+```typescript
+const qb = em.createQueryBuilder(User);
+
+// Finds users named John Doe who created a specific post, and returns the post title
+const result = await qb
+  .match()
+  .where('name', 'John Doe')
+  .related(User, 'posts') // automatically extracts 'CREATED' relationship
+  .where('title', 'Graph Databases 101')
+  .return(['title'])
+  .execute();
 ```
 
-### Available Scripts
+#### Complex Multi-Path Traversals 
 
-```bash
-# Build the library
-pnpm build
+You can build chains and complex logic easily.
 
-# Build in watch mode
-pnpm dev
+```typescript
+const qb = em.createQueryBuilder(Actor);
+const Cypher = qb.getCypher(); // Direct access to underlying @neo4j/cypher-builder toolkit
 
-# Run tests
-pnpm test
+// Find actors who acted in "The Matrix" AND also directed it
+const { cypher, params } = qb
+  .match()
+  .related(Actor, 'movies')
+  .where('title', 'The Matrix')
+  .match() // Starts a new MATCH statement linking the context
+  // Use raw pattern building for complex or undocumented graph spans
+  .rawCypherPattern(new Cypher.Pattern(qb.getCurrentNode()).related(new Cypher.Relationship({ type: 'DIRECTED' })).to(new Cypher.Node({ labels: ['Movie'] })))
+  .return(['name'])
+  .build();
 
-# Run tests in watch mode
-pnpm test:watch
-
-# Run tests with coverage
-pnpm test:coverage
-
-# Lint code
-pnpm lint
-
-# Fix lint issues
-pnpm lint:fix
-
-# Format code
-pnpm format
-
-# Check formatting
-pnpm format:check
-
-# Type check
-pnpm typecheck
+console.log(cypher); 
+// MATCH (this0:actor)-[this2:ACTED_IN]->(this1:movie)
+// WHERE this1.title = $param0
+// MATCH (this0)-[this3:DIRECTED]->(this4:Movie)
+// RETURN this0.name
 ```
 
-### Git Hooks
+#### Advanced Query Expressions with `Cypher` 
 
-This project uses Husky for git hooks:
+```typescript
+const qb = em.createQueryBuilder(Product);
+const Cypher = qb.getCypher();
 
-- **pre-commit**: Runs lint-staged to format and lint staged files
-- **pre-push**: Runs lint, typecheck, and tests before pushing
-- **commit-msg**: Validates commit messages using commitlint
+// Complex WHERE clauses with boolean logic
+const { cypher } = qb
+  .match()
+  .where(
+    Cypher.or(
+      Cypher.eq(qb.getCurrentNode().property('name'), new Cypher.Param('Laptop')),
+      Cypher.gt(qb.getCurrentNode().property('price'), new Cypher.Param(1000))
+    )
+  )
+  .return()
+  .build();
+```
 
-### Commit Convention
+Or you can use raw parameterized queries effortlessly:
 
-This project follows [Conventional Commits](https://www.conventionalcommits.org/):
-
-```bash
-feat: add new feature
-fix: fix bug
-docs: update documentation
-style: format code
-refactor: refactor code
-test: add tests
-chore: update dependencies
+```typescript
+const users = await em.run(
+  `MATCH (u:User)-[:CREATED]->(p:Post) WHERE p.title = $title RETURN u`,
+  { title: 'Graph Databases 101' }
+);
 ```
 
 ## License
 
-MIT
+MIT License
 
 ## Author
 
 Manuel Antunes
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'feat: add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request

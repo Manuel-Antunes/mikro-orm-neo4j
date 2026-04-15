@@ -27,7 +27,8 @@ export default [
       parserOptions: {
         ecmaVersion: 'latest',
         sourceType: 'module',
-        project: ['./tsconfig.json', './tsconfig.lib.json', './tsconfig.spec.json'],
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
       },
       globals: {
         // Node.js globals
@@ -67,6 +68,14 @@ export default [
           varsIgnorePattern: '^_',
         },
       ],
+    },
+  },
+  {
+    // Relax rules for test files — legacy decorator options require type assertions
+    files: ['tests/**/*.ts', '**/*.test.ts', '**/*.spec.ts'],
+    rules: {
+      '@typescript-eslint/ban-ts-comment': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
     },
   },
 ];

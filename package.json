@@ -51,6 +51,7 @@
     "@mikro-orm/core": "^7.0.2",
     "@mikro-orm/decorators": "^7.0.2",
     "@mikro-orm/reflection": "^7.0.2",
+    "@swc/core": "^1.15.26",
     "@types/node": "^22.13.5",
     "@typescript-eslint/eslint-plugin": "^8.21.0",
     "@typescript-eslint/parser": "^8.21.0",

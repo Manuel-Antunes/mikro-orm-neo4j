@@ -1,24 +1,17 @@
-import crypto from 'node:crypto';
-import {
-  Collection,
-  Ref,
-  type EntityManager,
-  Reference,
-} from '@mikro-orm/core';
+import { Collection, type Ref, Reference } from '@mikro-orm/core';
 import {
   Entity,
+  ManyToMany,
   ManyToOne,
   OneToMany,
-  ManyToMany,
   PrimaryKey,
   Property,
 } from '@mikro-orm/decorators/legacy';
 import { TsMorphMetadataProvider } from '@mikro-orm/reflection';
-import { MikroORM, Node, Rel, RelationshipProperties } from '@mikro-orm/neo4j';
-import {
-  setupNeo4jContainer,
-  StartedNeo4jContainer,
-} from '../src/utils/test/setup-neo4j-container';
+import crypto from 'node:crypto';
+import { MikroORM, Neo4jConnection } from '../src/index.js';
+import { setupNeo4jContainer, StartedNeo4jContainer } from './utils/setup-neo4j-container.js';
+
 const Neo4jMikroORM = MikroORM;
 // Traditional decorators
 @Entity()
@@ -46,13 +39,11 @@ class Product {
 
   @ManyToOne(() => Category, {
     ref: true,
-    nullable: true,
+    relation: { type: 'PART_OF', direction: 'OUT' },
   })
-  @Rel({ type: 'PART_OF', direction: 'OUT' })
   category?: Ref<Category>;
 
-  @ManyToMany(() => Tag)
-  @Rel({ type: 'HAS_TAG', direction: 'OUT' })
+  @ManyToMany({ entity: () => Tag, relation: { type: 'HAS_TAG', direction: 'OUT' } })
   tags = new Collection<Tag>(this);
 }
 
@@ -64,14 +55,16 @@ class Tag {
   @Property()
   name!: string;
 
-  @ManyToMany(() => Product, (p) => p.tags)
-  @Rel({ type: 'HAS_TAG', direction: 'IN' })
+  @ManyToMany({
+    entity: () => Product,
+    mappedBy: (p) => p.tags,
+    relation: { type: 'HAS_TAG', direction: 'IN' },
+  })
   products = new Collection<Product>(this);
 }
 
 // Graph-style decorators
-@Entity()
-@Node()
+@Entity({ neo4j: { labels: ['Person'] } })
 class Person {
   @Property({ primary: true })
   id: string = crypto.randomUUID();
@@ -84,19 +77,16 @@ class Person {
 
   @ManyToOne(() => Person, {
     ref: true,
-    nullable: true,
+    relation: { type: 'KNOWS', direction: 'OUT' },
   })
-  @Rel({ type: 'KNOWS', direction: 'OUT' })
   knows?: Ref<Person>;
 
-  @ManyToMany(() => Person)
-  @Rel({ type: 'WORKS_WITH', direction: 'OUT' })
+  @ManyToMany({ entity: () => Person, relation: { type: 'WORKS_WITH', direction: 'OUT' } })
   colleagues = new Collection<Person>(this);
 }
 
 // Node with multiple labels
-@Entity()
-@Node({ labels: ['Employee', 'Manager'] })
+@Entity({ neo4j: { labels: ['Employee', 'Manager'] } })
 class Executive {
   @Property({ primary: true })
   id: string = crypto.randomUUID();
@@ -126,7 +116,7 @@ class CategorySummary {
 }
 
 @Entity({
-  expression: (em: EntityManager, where: any, options: any) => {
+  expression: (em: Neo4jConnection, where: any, options: any) => {
     const cypher = `
       MATCH (p:product)-[:PART_OF]->(c:category)
       RETURN {
@@ -139,6 +129,7 @@ class CategorySummary {
       }
       ${options.limit ? `LIMIT ${options.limit}` : ''}
     `;
+
     return { cypher, params: {} };
   },
 })
@@ -154,8 +145,8 @@ class ProductWithCategory {
 }
 
 // Neo4j GraphQL-style entities for relationship properties
-@Entity()
-@Node()
+
+@Entity({ neo4j: { labels: ['Actor'] } })
 class Actor {
   @Property({ primary: true })
   id: string = crypto.randomUUID();
@@ -169,20 +160,19 @@ class Actor {
   @ManyToMany(() => Movie, undefined, {
     pivotEntity: () => ActedIn,
     inversedBy: 'actors',
+    relation: { type: 'ACTED_IN', direction: 'OUT' },
   })
-  @Rel({ type: 'ACTED_IN', direction: 'OUT' })
   movies = new Collection<Movie>(this);
 
   @ManyToMany(() => Series, undefined, {
     pivotEntity: () => ActedInSeries,
     inversedBy: 'actors',
+    relation: { type: 'ACTED_IN', direction: 'OUT' },
   })
-  @Rel({ type: 'ACTED_IN', direction: 'OUT' })
   series = new Collection<Series>(this);
 }
 
-@Entity()
-@Node()
+@Entity({ neo4j: { labels: ['Movie'] } })
 class Movie {
   @Property({ primary: true })
   id: string = crypto.randomUUID();
@@ -196,13 +186,15 @@ class Movie {
   @Property({ nullable: true })
   tagline?: string;
 
-  @ManyToMany(() => Actor, (actor) => actor.movies)
-  @Rel({ type: 'ACTED_IN', direction: 'IN' })
+  @ManyToMany({
+    entity: () => Actor,
+    mappedBy: (actor) => actor.movies,
+    relation: { type: 'ACTED_IN', direction: 'IN' },
+  })
   actors = new Collection<Actor>(this);
 }
 
-@Entity()
-@Node()
+@Entity({ neo4j: { labels: ['Series'] } })
 class Series {
   @Property({ primary: true })
   id: string = crypto.randomUUID();
@@ -216,13 +208,15 @@ class Series {
   @Property()
   episodes!: number;
 
-  @ManyToMany(() => Actor, (actor) => actor.series)
-  @Rel({ type: 'ACTED_IN', direction: 'IN' })
+  @ManyToMany({
+    entity: () => Actor,
+    mappedBy: (actor) => actor.series,
+    relation: { type: 'ACTED_IN', direction: 'IN' },
+  })
   actors = new Collection<Actor>(this);
 }
 
-@Entity()
-@RelationshipProperties({ type: 'ACTED_IN' })
+@Entity({ neo4j: { relationshipEntity: true, type: 'ACTED_IN' } })
 class ActedIn {
   @PrimaryKey()
   id: string = crypto.randomUUID();
@@ -237,8 +231,7 @@ class ActedIn {
   roles!: string[];
 }
 
-@Entity()
-@RelationshipProperties({ type: 'ACTED_IN' })
+@Entity({ neo4j: { relationshipEntity: true, type: 'ACTED_IN' } })
 class ActedInSeries {
   @PrimaryKey()
   id: string = crypto.randomUUID();
@@ -254,8 +247,7 @@ class ActedInSeries {
 }
 
 // User friendship example for relationship property querying
-@Entity()
-@Node()
+@Entity({ neo4j: { labels: ['User'] } })
 class User {
   @Property({ primary: true })
   id: string = crypto.randomUUID();
@@ -268,13 +260,12 @@ class User {
 
   @ManyToMany(() => User, undefined, {
     pivotEntity: () => FriendsWith,
+    relation: { type: 'FRIENDS_WITH', direction: 'OUT' },
   })
-  @Rel({ type: 'FRIENDS_WITH', direction: 'OUT' })
   friends = new Collection<User>(this);
 }
 
-@Entity()
-@RelationshipProperties({ type: 'FRIENDS_WITH' })
+@Entity({ neo4j: { relationshipEntity: true, type: 'FRIENDS_WITH' } })
 class FriendsWith {
   @PrimaryKey()
   id: string = crypto.randomUUID();
@@ -1394,10 +1385,10 @@ describe('Neo4j driver (MVP)', () => {
       // Also verify with QueryBuilder pattern API to show relationship filtering
       const qb = orm.em.createQueryBuilder(User, 'u1');
       const Cypher = qb.getCypher();
-      const node = qb.getNode();
+      const _node = qb.getNode();
 
       const rel = new Cypher.Relationship({ type: 'FRIENDS_WITH' });
-      const u2 = new Cypher.Node({ labels: ['user'] });
+      const _u2 = new Cypher.Node({ labels: ['user'] });
 
       const patternQb = qb
         .match()
@@ -1625,10 +1616,10 @@ describe('Neo4j driver (MVP)', () => {
     describe('Basic Query Building', () => {
       test('should build simple MATCH query', () => {
         const qb = orm.em.createQueryBuilder(Movie);
-        const { cypher, params } = qb.match().return().build();
+        const { cypher } = qb.match().return().build();
 
         expect(cypher).toContain('MATCH');
-        expect(cypher).toContain('Movie');
+        expect(cypher).toContain('movie');
         expect(cypher).toContain('RETURN');
       });
 
@@ -1644,7 +1635,7 @@ describe('Neo4j driver (MVP)', () => {
 
       test('should build MATCH with specific properties returned', () => {
         const qb = orm.em.createQueryBuilder(Movie);
-        const { cypher, params } = qb
+        const { cypher } = qb
           .match()
           .where('title', 'The Matrix')
           .return(['title', 'released'])
@@ -1679,7 +1670,7 @@ describe('Neo4j driver (MVP)', () => {
           .build();
 
         expect(cypher).toContain('CREATE');
-        expect(cypher).toContain('Movie');
+        expect(cypher).toContain('movie');
         expect(params).toHaveProperty('param0', 'Inception');
         expect(params).toHaveProperty('param1', 2010);
       });
@@ -1689,7 +1680,7 @@ describe('Neo4j driver (MVP)', () => {
         const { cypher, params } = qb.merge({ title: 'The Matrix' }).return().build();
 
         expect(cypher).toContain('MERGE');
-        expect(cypher).toContain('Movie');
+        expect(cypher).toContain('movie');
         expect(params).toHaveProperty('param0', 'The Matrix');
       });
     });
@@ -2078,7 +2069,7 @@ describe('Neo4j driver (MVP)', () => {
 
         const { cypher } = qb.match().return().build();
 
-        expect(cypher).toContain('Movie');
+        expect(cypher).toContain('movie');
       });
     });
 
@@ -2197,7 +2188,10 @@ describe('Neo4j driver (MVP)', () => {
 
       test('should allow saving and reusing query parts', async () => {
         // Create base query that can be reused
-        const baseQuery = orm.em.createQueryBuilder<Movie>('Movie').match().where('released', 1999);
+        const _baseQuery = orm.em
+          .createQueryBuilder<Movie>('Movie')
+          .match()
+          .where('released', 1999);
 
         // Create two different queries from the same base
         const query1 = orm.em
@@ -2335,7 +2329,7 @@ describe('Neo4j driver (MVP)', () => {
     describe('Custom Pattern Building', () => {
       test('should allow custom pattern construction', () => {
         const qb = orm.em.createQueryBuilder(Movie);
-        const CypherLib = qb.getCypher();
+        const _CypherLib = qb.getCypher();
 
         const { cypher } = qb
           .match()
@@ -2359,7 +2353,7 @@ describe('Neo4j driver (MVP)', () => {
       test('should support complex multi-hop patterns', () => {
         const qb = orm.em.createQueryBuilder(Movie);
         const Cypher = qb.getCypher();
-        const movieNode = qb.getNode();
+        const _movieNode = qb.getNode();
 
         const actorNode = new Cypher.Node();
         const friendNode = new Cypher.Node();
@@ -2595,10 +2589,9 @@ describe('Neo4j driver (MVP)', () => {
         expect(cypher).toContain('->');
       });
 
-      test('should extract multiple labels from @Node decorator', () => {
+      test('should extract multiple labels from entity custom options', () => {
         // Create a test entity with multiple labels
-        @Entity()
-        @Node({ labels: ['Employee', 'Manager'] })
+        @Entity({ neo4j: { labels: ['Employee', 'Manager'] } })
         class Executive {
           @PrimaryKey()
           id!: number;
@@ -2611,7 +2604,7 @@ describe('Neo4j driver (MVP)', () => {
         const { cypher } = qb.match().return(['name']).build();
 
         expect(cypher).toContain('MATCH');
-        expect(cypher).toContain('Executive');
+        expect(cypher).toContain('executive');
       });
 
       test('should work with entity-based queries and filters', () => {
@@ -2634,7 +2627,7 @@ describe('Neo4j driver (MVP)', () => {
 
         expect(() => {
           qb.match().related(Movie, 'invalidProperty').build();
-        }).toThrow(/No @Rel decorator found/);
+        }).toThrow(/No relationship metadata found/);
       });
 
       test('should work with entity classes in complex patterns', () => {
@@ -2729,7 +2722,7 @@ describe('Neo4j driver (MVP)', () => {
 
         // Query using relationship entity class - create query builder for Cypher verification
         const qb1 = orm.em.createQueryBuilder(User);
-        const { cypher, params } = qb1.match().related(FriendsWith).return(['username']).build();
+        const { cypher } = qb1.match().related(FriendsWith).return(['username']).build();
 
         // Verify the query is built correctly
         expect(cypher).toContain('FRIENDS_WITH');

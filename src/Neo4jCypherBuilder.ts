@@ -1,51 +1,66 @@
 import { type EntityMetadata, type EntityProperty, ReferenceKind } from '@mikro-orm/core';
-import { getRelationshipMetadata } from './utils/getRelationshipMetadata';
+
+/** Helper: read Neo4j-specific metadata stored on MikroORM properties. */
+function readPropertyOption(obj: unknown): Record<string, unknown> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ((obj as any).relation as Record<string, unknown>) ?? {};
+}
+
+/** Helper: read Neo4j-specific metadata stored on MikroORM entities. */
+function readEntityOption(obj: unknown): Record<string, unknown> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ((obj as any).neo4j as Record<string, unknown>) ?? {};
+}
 
 /**
- * Utility class for extracting Neo4j-specific metadata from MikroORM entity decorators.
- * Provides shared helpers for getting labels, relationship types, directions, etc.
+ * Utility class for extracting Neo4j-specific metadata from MikroORM entity metadata.
+ * Reads from `relation: { type, direction }` on @ManyToOne/ManyToMany options and `neo4j: { labels, relationshipEntity, type }` on @Entity().
  */
 export class Neo4jCypherBuilder {
   /**
    * Extracts Neo4j labels from entity metadata.
-   * Includes the primary label (collection name) and any additional labels from @Node decorator.
+   * Primary label is the collection name; additional labels come from `neo4j.labels`.
    */
   static getNodeLabels<T extends object>(meta: EntityMetadata<T>): string[] {
-    const labels = [meta.collection];
-    const additionalLabels = (meta as any).neo4jLabels;
+    // `collection` is set after full metadata discovery; for defineEntity schemas used
+    // before discovery completes, fall back to the lowercased className.
+    const primaryLabel = meta.collection ?? meta.className.toLowerCase();
+    const labels = [primaryLabel];
+    const additionalLabels = readEntityOption(meta).labels;
 
     if (additionalLabels && Array.isArray(additionalLabels)) {
-      labels.push(...additionalLabels);
+      labels.push(...(additionalLabels as string[]));
     }
 
     return labels;
   }
 
   /**
-   * Gets the relationship type from @Rel/@RelMany decorator or falls back to property name.
-   * Returns undefined if no decorator metadata is found (used for validation).
+   * Gets the relationship type from property custom options or falls back to the property name.
+   * Reads `relation.type` from the property metadata.
+   * For ManyToMany with a pivot entity, falls back to the pivot entity name uppercased.
    */
   static getRelationshipType<T extends object>(
-    sourceEntity: EntityMetadata<T> | Function,
+    _sourceEntity: EntityMetadata<T> | object,
     property: EntityProperty | string,
     allowFallback = true,
   ): string | undefined {
-    const entityClass =
-      typeof sourceEntity === 'function' ? sourceEntity : (sourceEntity as EntityMetadata<T>).class;
-
-    const propertyName = typeof property === 'string' ? property : property.name;
-
-    // Try to get from decorator metadata
-    const relMetadata = getRelationshipMetadata(entityClass, propertyName);
-    if (relMetadata?.type) {
-      return relMetadata.type;
+    let propMetadata: EntityProperty | undefined;
+    if (typeof property !== 'string') {
+      propMetadata = property;
     }
 
-    // Fallback: check property custom metadata
-    if (typeof property !== 'string') {
-      const customRel = (property as any).custom?.relationship;
-      if (customRel?.type) {
-        return customRel.type;
+    // Try to get from property metadata
+    if (propMetadata) {
+      const relation = readPropertyOption(propMetadata);
+      if (relation.type && typeof relation.type === 'string') {
+        return relation.type;
+      }
+      // If it's a ManyToMany with a pivot entity, derive from pivot entity name
+      if (propMetadata.kind === ReferenceKind.MANY_TO_MANY && propMetadata.pivotEntity) {
+        const pivotEntity = propMetadata.pivotEntity as string | { name: string };
+        const pivotName = typeof pivotEntity === 'string' ? pivotEntity : pivotEntity.name;
+        return pivotName.toUpperCase();
       }
     }
 
@@ -55,46 +70,54 @@ export class Neo4jCypherBuilder {
     }
 
     // Default: uppercase property name
+    const propertyName = typeof property === 'string' ? property : property.name;
     return propertyName.toUpperCase();
   }
 
   /**
-   * Gets the relationship direction from @Rel/@RelMany decorator.
+   * Gets the relationship direction from property relation payload.
+   * Not used directly when direction is passed through property.relation — kept for API compatibility.
    */
   static getRelationshipDirection(
-    sourceEntity: Function,
-    propertyName: string,
+    _sourceEntity: object,
+    _propertyName: string,
   ): 'IN' | 'OUT' | undefined {
-    const relMetadata = getRelationshipMetadata(sourceEntity, propertyName);
-    return relMetadata?.direction;
+    return undefined;
   }
 
   /**
-   * Checks if an entity is a relationship entity (has @RelationshipProperties).
+   * Checks if an entity is a relationship entity (pivot entity used for relationship properties).
+   * Detected via `meta.pivotTable` flag set by MikroORM, or via `neo4j.relationshipEntity: true`.
    */
   static isRelationshipEntity<T extends object>(meta: EntityMetadata<T>): boolean {
-    return !!(meta as any).neo4jRelationshipEntity;
+    return !!meta.pivotTable || readEntityOption(meta).relationshipEntity === true;
   }
 
   /**
-   * Gets the relationship type for a relationship entity.
+   * Gets the relationship type string for a relationship entity (pivot).
+   * Reads `neo4j.type`, falls back to collection name uppercased.
    */
   static getRelationshipEntityType<T extends object>(meta: EntityMetadata<T>): string {
-    return (meta as any).neo4jRelationshipType ?? meta.className.toUpperCase();
+    const neo4j = readEntityOption(meta);
+    return (
+      (typeof neo4j.type === 'string' ? neo4j.type : undefined) ?? meta.collection.toUpperCase()
+    );
   }
 
   /**
-   * Finds the two @ManyToOne properties in a relationship entity.
+   * Finds the two reference properties (ManyToOne / OneToOne) in a relationship entity.
    */
   static getRelationshipEntityEnds<T extends object>(
     meta: EntityMetadata<T>,
   ): [EntityProperty<T>, EntityProperty<T>] {
     const props = Object.values(meta.properties) as EntityProperty<T>[];
-    const manyToOneProps = props.filter((p) => p.kind === ReferenceKind.MANY_TO_ONE);
+    const manyToOneProps = props.filter(
+      (p) => p.kind === ReferenceKind.MANY_TO_ONE || p.kind === ReferenceKind.ONE_TO_ONE,
+    );
 
     if (manyToOneProps.length !== 2) {
       throw new Error(
-        `Relationship entity ${meta.className} must have exactly 2 @ManyToOne properties, found ${manyToOneProps.length}`,
+        `Relationship entity ${meta.className} must have exactly 2 reference properties, found ${manyToOneProps.length}`,
       );
     }
 
@@ -107,19 +130,5 @@ export class Neo4jCypherBuilder {
   static getNodeLabelsString<T extends object>(meta: EntityMetadata<T>): string {
     const labels = this.getNodeLabels(meta);
     return ':' + labels.join(':');
-  }
-
-  /**
-   * Converts Neo4j relationship direction to QueryBuilder direction format.
-   * @param direction - Neo4j direction ('IN' or 'OUT')
-   * @returns QueryBuilder direction ('left', 'right', or 'undirected')
-   */
-  static convertDirection(
-    direction: 'IN' | 'OUT' | undefined,
-  ): 'left' | 'right' | 'undirected' | undefined {
-    if (!direction) {
-      return undefined;
-    }
-    return direction === 'IN' ? 'left' : 'right';
   }
 }

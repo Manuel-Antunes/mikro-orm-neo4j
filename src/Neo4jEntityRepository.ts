@@ -44,7 +44,7 @@ export class Neo4jEntityRepository<T extends object> extends EntityRepository<T>
    *   .execute();
    * ```
    */
-  createQueryBuilder(alias: string): Neo4jQueryBuilder<T> {
+  createQueryBuilder(_alias?: string): Neo4jQueryBuilder<T> {
     return new Neo4jQueryBuilder<T>(this.entityName, this.em);
   }
 

@@ -29,9 +29,8 @@ import { Neo4jConnection } from './Neo4jConnection';
 import { Neo4jPlatform } from './Neo4jPlatform';
 import { Neo4jEntityManager } from './Neo4jEntityManager';
 import { Neo4jCypherBuilder } from './Neo4jCypherBuilder';
-import { getRelationshipMetadata } from './utils/getRelationshipMetadata';
+import { Neo4jCypherUtils } from './Neo4jCypherUtils';
 import Cypher from '@neo4j/cypher-builder';
-import type { RelationshipOptions } from './decorators/Rel';
 
 interface Neo4jQueryOptions<T> {
   where?: FilterQuery<T>;
@@ -138,18 +137,8 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     options: CountOptions<T> = {},
   ): Promise<number> {
     const meta = this.metadata.find<T>(entityName)!;
-    const labels = Neo4jCypherBuilder.getNodeLabels(meta);
-    const node = new Cypher.Node();
-    const pattern = new Cypher.Pattern(node, { labels });
-    let query: any = new Cypher.Match(pattern);
-
-    // Apply WHERE
-    if (where && Object.keys(where).length > 0) {
-      const whereClauses = this.buildWhereClauses(node, where);
-      if (whereClauses.length > 0) {
-        query = query.where(Cypher.and(...whereClauses));
-      }
-    }
+    const { node, clause } = Neo4jCypherUtils.createNodeMatch(meta);
+    let query: any = Neo4jCypherUtils.applyWhere(clause, node, where);
 
     // Return count
     query = query.return([Cypher.count(node), 'total']);
@@ -216,15 +205,8 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
   ): Promise<QueryResult<T>> {
     const meta = this.metadata.find<T>(entityName)!;
     const payload = this.preparePayload(meta, data, true);
-    const labels = Neo4jCypherBuilder.getNodeLabels(meta);
-    const node = new Cypher.Node();
-    const pattern = new Cypher.Pattern(node, { labels });
-    let query: any = new Cypher.Match(pattern);
-
-    const whereClauses = this.buildWhereClauses(node, where);
-    if (whereClauses.length > 0) {
-      query = query.where(Cypher.and(...whereClauses));
-    }
+    const { node, clause } = Neo4jCypherUtils.createNodeMatch(meta);
+    let query: any = Neo4jCypherUtils.applyWhere(clause, node, where);
 
     // Set individual properties to avoid overwriting the entire node
     if (Object.keys(payload.nodeProps).length > 0) {
@@ -241,7 +223,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     // Get the node from the first key in the record
     const resultNode = res.records[0]?.get(res.records[0]?.keys[0]);
     if (resultNode && payload.relations.length) {
-      const idValue = this.convertNeo4jValue(resultNode.properties?.id);
+      const idValue = Neo4jCypherUtils.convertNeo4jValue(resultNode.properties?.id);
       await this.persistRelations(meta, idValue, payload.relations, options.ctx, true);
     }
     return resultNode
@@ -275,15 +257,8 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     options: DeleteOptions<T> = {},
   ): Promise<QueryResult<T>> {
     const meta = this.metadata.find<T>(entityName)!;
-    const labels = Neo4jCypherBuilder.getNodeLabels(meta);
-    const node = new Cypher.Node();
-    const pattern = new Cypher.Pattern(node, { labels });
-    let query: any = new Cypher.Match(pattern);
-
-    const whereClauses = this.buildWhereClauses(node, where);
-    if (whereClauses.length > 0) {
-      query = query.where(Cypher.and(...whereClauses));
-    }
+    const { node, clause } = Neo4jCypherUtils.createNodeMatch(meta);
+    let query: any = Neo4jCypherUtils.applyWhere(clause, node, where);
 
     query = query.detachDelete(node).return(Cypher.count(node));
     const { cypher, params } = query.build();
@@ -299,7 +274,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     void entityName;
     const cypher = pipeline.join('\n');
     const res = await this.connection.executeRaw(cypher, {});
-    return res.records.map((r: any) => this.convertNeo4jRecord(r.toObject()));
+    return res.records.map((r: any) => Neo4jCypherUtils.convertNeo4jRecord(r.toObject()));
   }
 
   override async findVirtual<T extends object>(
@@ -324,7 +299,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     const res = await this.connection.executeRaw(cypher, params, options.ctx);
     return res.records.map((r: any) => {
       const obj = r.get ? r.get('node') : r.toObject();
-      const converted = this.convertNeo4jRecord(obj);
+      const converted = Neo4jCypherUtils.convertNeo4jRecord(obj);
       return this.mapResult(converted, meta) as EntityData<T>;
     });
   }
@@ -356,7 +331,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     return this.platform as Neo4jPlatform;
   }
 
-  override async syncCollections<T extends object, O extends object>(
+  override async syncCollections(
     collections: Iterable<any>,
     options?: DriverMethodOptions,
   ): Promise<void> {
@@ -389,13 +364,8 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
 
     let query: any = new Cypher.Match(pattern);
 
-    // Build WHERE clause for relationship properties
-    if (where && Object.keys(where).length > 0) {
-      const whereClauses = this.buildRelationshipWhereClauses(rel, where);
-      if (whereClauses.length > 0) {
-        query = query.where(Cypher.and(...whereClauses));
-      }
-    }
+    // Build WHERE clause for relationship properties using shared utility
+    query = Neo4jCypherUtils.applyWhere(query, rel, where);
 
     // Handle populate
     const populate = this.normalizePopulate(options.populate);
@@ -408,9 +378,9 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
 
     // Apply ORDER BY
     if (options.orderBy) {
-      const orderClauses = this.buildRelationshipOrderClauses(rel, options.orderBy as any);
-      if (orderClauses.length > 0) {
-        query = query.orderBy(...orderClauses);
+      const orderClauses = Neo4jCypherUtils.buildOrderClauses(rel, options.orderBy as any);
+      for (const orderClause of orderClauses) {
+        query = query.orderBy(orderClause);
       }
     }
 
@@ -430,31 +400,31 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       const sourceData = record.get(record.keys[1]);
       const targetData = record.get(record.keys[2]);
 
-      const result: any = this.convertNeo4jRecord(relData.properties);
+      const result: any = Neo4jCypherUtils.convertNeo4jRecord(relData.properties);
 
       // Add source node - either fully populated or just ID reference
       if (shouldPopulateSource && sourceData) {
         result[sourceProp.name] = this.mapResult(
-          this.convertNeo4jRecord(sourceData.properties),
+          Neo4jCypherUtils.convertNeo4jRecord(sourceData.properties),
           sourceProp.targetMeta!,
         ) as any;
       } else if (sourceData) {
         // Create reference with just the ID
         const sourcePK = sourceProp.targetMeta!.getPrimaryProps()[0];
-        const sourceProps = this.convertNeo4jRecord(sourceData.properties);
+        const sourceProps = Neo4jCypherUtils.convertNeo4jRecord(sourceData.properties);
         result[sourceProp.name] = sourceProps[sourcePK.name];
       }
 
       // Add target node - either fully populated or just ID reference
       if (shouldPopulateTarget && targetData) {
         result[targetProp.name] = this.mapResult(
-          this.convertNeo4jRecord(targetData.properties),
+          Neo4jCypherUtils.convertNeo4jRecord(targetData.properties),
           targetProp.targetMeta!,
         ) as any;
       } else if (targetData) {
         // Create reference with just the ID
         const targetPK = targetProp.targetMeta!.getPrimaryProps()[0];
-        const targetProps = this.convertNeo4jRecord(targetData.properties);
+        const targetProps = Neo4jCypherUtils.convertNeo4jRecord(targetData.properties);
         result[targetProp.name] = targetProps[targetPK.name];
       }
 
@@ -468,7 +438,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     }
     const props = node.properties ?? node;
     // Convert Neo4j types before mapping
-    const converted = this.convertNeo4jRecord(props);
+    const converted = Neo4jCypherUtils.convertNeo4jRecord(props);
     return this.mapResult(converted, meta) as EntityData<T>;
   }
 
@@ -477,18 +447,8 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     options: Neo4jQueryOptions<T>,
     populate?: readonly string[],
   ): { cypher: string; params: Dictionary } {
-    const labels = Neo4jCypherBuilder.getNodeLabels(meta);
-    const node = new Cypher.Node();
-    const pattern = new Cypher.Pattern(node, { labels });
-    let query: any = new Cypher.Match(pattern);
-
-    // Apply WHERE
-    if (options.where && Object.keys(options.where).length > 0) {
-      const whereClauses = this.buildWhereClauses(node, options.where);
-      if (whereClauses.length > 0) {
-        query = query.where(Cypher.and(...whereClauses));
-      }
-    }
+    const { node, clause } = Neo4jCypherUtils.createNodeMatch(meta);
+    let query: any = Neo4jCypherUtils.applyWhere(clause, node, options.where ?? {});
 
     // Return node with 'node' alias for consistent retrieval
     const returnVars: any[] = [[node, 'node']];
@@ -502,59 +462,29 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
         }
 
         const relType = Neo4jCypherBuilder.getRelationshipType(meta, prop);
-        const direction = Neo4jCypherBuilder.getRelationshipDirection(meta.class, fieldName);
+        // Read direction from property relation metadata
+        const propCustom = (prop as any).relation;
+        const direction: 'IN' | 'OUT' | undefined = propCustom?.direction ?? undefined;
+        const targetLabels = prop.targetMeta
+          ? Neo4jCypherBuilder.getNodeLabels(prop.targetMeta)
+          : [prop.type];
+        const targetNode = new Cypher.Node();
+        const rel = new Cypher.Relationship();
+
+        const relPattern = Neo4jCypherUtils.buildRelationshipPattern(
+          node,
+          targetNode,
+          relType!,
+          direction,
+          rel,
+          targetLabels,
+        );
 
         if (prop.kind === ReferenceKind.MANY_TO_ONE || prop.kind === ReferenceKind.ONE_TO_ONE) {
-          const targetLabels = prop.targetMeta
-            ? Neo4jCypherBuilder.getNodeLabels(prop.targetMeta)
-            : [prop.type];
-          const targetNode = new Cypher.Node();
-          const rel = new Cypher.Relationship();
-
-          let relPattern;
-          if (direction === 'OUT') {
-            relPattern = new Cypher.Pattern(node)
-              .related(rel, { type: relType, direction: 'right' })
-              .to(targetNode, { labels: targetLabels });
-          } else if (direction === 'IN') {
-            relPattern = new Cypher.Pattern(targetNode, {
-              labels: targetLabels,
-            })
-              .related(rel, { type: relType, direction: 'right' })
-              .to(node);
-          } else {
-            relPattern = new Cypher.Pattern(node)
-              .related(rel, { type: relType })
-              .to(targetNode, { labels: targetLabels });
-          }
-
           query = query.optionalMatch(relPattern);
           // Return with alias matching what hydrateWithRelations expects
           returnVars.push([targetNode, `rel_${fieldName}`]);
         } else if (prop.kind === ReferenceKind.MANY_TO_MANY) {
-          const targetLabels = prop.targetMeta
-            ? Neo4jCypherBuilder.getNodeLabels(prop.targetMeta)
-            : [prop.type];
-          const targetNode = new Cypher.Node();
-          const rel = new Cypher.Relationship();
-
-          let relPattern;
-          if (direction === 'OUT') {
-            relPattern = new Cypher.Pattern(node)
-              .related(rel, { type: relType, direction: 'right' })
-              .to(targetNode, { labels: targetLabels });
-          } else if (direction === 'IN') {
-            relPattern = new Cypher.Pattern(targetNode, {
-              labels: targetLabels,
-            })
-              .related(rel, { type: relType, direction: 'right' })
-              .to(node);
-          } else {
-            relPattern = new Cypher.Pattern(node)
-              .related(rel, { type: relType })
-              .to(targetNode, { labels: targetLabels });
-          }
-
           query = query.optionalMatch(relPattern);
 
           if (prop.pivotEntity) {
@@ -573,7 +503,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
 
     // Apply ORDER BY
     if (options.orderBy) {
-      const orderClauses = this.buildOrderClauses(node, options.orderBy);
+      const orderClauses = Neo4jCypherUtils.buildOrderClauses(node, options.orderBy);
       for (const orderClause of orderClauses) {
         query = query.orderBy(orderClause);
       }
@@ -626,7 +556,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
             if (relNode?.properties) {
               (result as any)[fieldName] = this.mapRecord(prop.targetMeta!, relNode);
             }
-          } catch (e) {
+          } catch {
             // Relation not found, leave as undefined
           }
         } else if (prop && prop.kind === ReferenceKind.MANY_TO_MANY) {
@@ -652,7 +582,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
             } else {
               (result as any)[fieldName] = [];
             }
-          } catch (e) {
+          } catch {
             // Relation not found, leave as empty array
             (result as any)[fieldName] = [];
           }
@@ -661,193 +591,6 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     }
 
     return result;
-  }
-
-  private buildWhereClauses<T extends object>(
-    node: Cypher.Node,
-    where: FilterQuery<T>,
-  ): Cypher.Predicate[] {
-    if (!where || (typeof where === 'object' && Object.keys(where).length === 0)) {
-      return [];
-    }
-
-    const clauses: Cypher.Predicate[] = [];
-    Object.entries(where as Dictionary).forEach(([key, value]) => {
-      if (key === '$and' && Array.isArray(value)) {
-        const nested = value.flatMap((v) => this.buildWhereClauses(node, v as FilterQuery<T>));
-        if (nested.length > 0) {
-          const andClause = Cypher.and(...nested);
-          if (andClause) {
-            clauses.push(andClause);
-          }
-        }
-        return;
-      }
-      if (key === '$or' && Array.isArray(value)) {
-        const nested = value.flatMap((v) => this.buildWhereClauses(node, v as FilterQuery<T>));
-        if (nested.length > 0) {
-          const orClause = Cypher.or(...nested);
-          if (orClause) {
-            clauses.push(orClause);
-          }
-        }
-        return;
-      }
-
-      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-        const prop = node.property(key);
-        let appliedOperator = false;
-
-        Object.entries(value as Dictionary).forEach(([op, opValue]) => {
-          switch (op) {
-            case '$eq':
-              clauses.push(Cypher.eq(prop, new Cypher.Param(opValue)));
-              appliedOperator = true;
-              break;
-            case '$ne':
-              clauses.push(Cypher.neq(prop, new Cypher.Param(opValue)));
-              appliedOperator = true;
-              break;
-            case '$gt':
-              clauses.push(Cypher.gt(prop, new Cypher.Param(opValue)));
-              appliedOperator = true;
-              break;
-            case '$gte':
-              clauses.push(Cypher.gte(prop, new Cypher.Param(opValue)));
-              appliedOperator = true;
-              break;
-            case '$lt':
-              clauses.push(Cypher.lt(prop, new Cypher.Param(opValue)));
-              appliedOperator = true;
-              break;
-            case '$lte':
-              clauses.push(Cypher.lte(prop, new Cypher.Param(opValue)));
-              appliedOperator = true;
-              break;
-            default:
-              break;
-          }
-        });
-
-        if (!appliedOperator) {
-          clauses.push(Cypher.eq(prop, new Cypher.Param(value)));
-        }
-
-        return;
-      }
-
-      clauses.push(Cypher.eq(node.property(key), new Cypher.Param(value)));
-    });
-
-    return clauses;
-  }
-
-  private buildRelationshipWhereClauses<T extends object>(
-    rel: Cypher.Relationship,
-    where: FilterQuery<T>,
-  ): Cypher.Predicate[] {
-    const clauses: Cypher.Predicate[] = [];
-
-    Object.entries(where).forEach(([key, value]) => {
-      if (key === '$and' && Array.isArray(value)) {
-        const nested = value.flatMap((v) =>
-          this.buildRelationshipWhereClauses(rel, v as FilterQuery<T>),
-        );
-        if (nested.length > 0) {
-          const andClause = Cypher.and(...nested);
-          if (andClause) {
-            clauses.push(andClause);
-          }
-        }
-        return;
-      }
-      if (key === '$or' && Array.isArray(value)) {
-        const nested = value.flatMap((v) =>
-          this.buildRelationshipWhereClauses(rel, v as FilterQuery<T>),
-        );
-        if (nested.length > 0) {
-          const orClause = Cypher.or(...nested);
-          if (orClause) {
-            clauses.push(orClause);
-          }
-        }
-        return;
-      }
-
-      // Handle operators
-      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-        Object.entries(value).forEach(([op, opValue]) => {
-          const prop = rel.property(key);
-          switch (op) {
-            case '$eq':
-              clauses.push(Cypher.eq(prop, new Cypher.Param(opValue)));
-              break;
-            case '$ne':
-              clauses.push(Cypher.neq(prop, new Cypher.Param(opValue)));
-              break;
-            case '$gt':
-              clauses.push(Cypher.gt(prop, new Cypher.Param(opValue)));
-              break;
-            case '$gte':
-              clauses.push(Cypher.gte(prop, new Cypher.Param(opValue)));
-              break;
-            case '$lt':
-              clauses.push(Cypher.lt(prop, new Cypher.Param(opValue)));
-              break;
-            case '$lte':
-              clauses.push(Cypher.lte(prop, new Cypher.Param(opValue)));
-              break;
-            default:
-              clauses.push(Cypher.eq(prop, new Cypher.Param(opValue)));
-          }
-        });
-      } else {
-        clauses.push(Cypher.eq(rel.property(key), new Cypher.Param(value)));
-      }
-    });
-
-    return clauses;
-  }
-
-  private buildRelationshipOrderClauses<T extends object>(
-    rel: Cypher.Relationship,
-    orderBy?: QueryOrderMap<T> | QueryOrderMap<T>[],
-  ): any[] {
-    if (!orderBy || (Array.isArray(orderBy) && orderBy.length === 0)) {
-      return [];
-    }
-    const parts: any[] = [];
-    const arr = Array.isArray(orderBy) ? orderBy : [orderBy];
-    for (const item of arr) {
-      Object.entries(item).forEach(([key, dir]) => {
-        const direction = dir === 'ASC' || dir === 1 || dir === 'asc' ? 'ASC' : 'DESC';
-        parts.push([rel.property(key as string), direction]);
-      });
-    }
-    return parts;
-  }
-
-  private buildOrderClauses<T extends object>(
-    node: Cypher.Node,
-    orderBy?: QueryOrderMap<T> | QueryOrderMap<T>[],
-  ): any[] {
-    if (!orderBy || (Array.isArray(orderBy) && orderBy.length === 0)) {
-      return [];
-    }
-    const parts: any[] = [];
-    const arr = Array.isArray(orderBy) ? orderBy : [orderBy];
-    for (const ob of arr) {
-      Object.entries(ob as Dictionary).forEach(([field, dir]) => {
-        const prop = node.property(field);
-        // Create proper tuple for orderBy clause
-        const sortItem =
-          String(dir).toUpperCase() === 'DESC'
-            ? ([prop, 'DESC'] as [any, 'DESC'])
-            : ([prop, 'ASC'] as [any, 'ASC']);
-        parts.push(sortItem);
-      });
-    }
-    return parts;
   }
 
   private preparePayload<T extends object>(
@@ -894,14 +637,15 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
               ? ((val as any)[prop.targetMeta!.primaryKeys[0]] ?? val)
               : val;
           // Get relationship metadata from WeakMap or fallback to custom property
-          const relMetadata = getRelationshipMetadata(meta.class, prop.name);
-          const relationship =
-            relMetadata ?? ((prop as any).custom?.relationship as RelationshipOptions);
-          const relType = relationship?.type ?? prop.name.toUpperCase();
+          const relType =
+            Neo4jCypherBuilder.getRelationshipType(meta, prop) ?? prop.name.toUpperCase();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const propCustomDir = (prop as any).relation?.direction;
+          const direction: 'IN' | 'OUT' = propCustomDir ?? 'OUT';
           relations.push({
             prop,
             target: prop.type,
-            direction: relationship?.direction ?? 'OUT',
+            direction: direction ?? 'OUT',
             type: relType,
             value: nodeProps[prop.name],
           });
@@ -915,13 +659,11 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
         const items = val instanceof Collection ? val.getItems() : Array.isArray(val) ? val : [];
         if (items.length > 0) {
           // Get relationship metadata from WeakMap or fallback to custom property
-          const relMetadata = getRelationshipMetadata(meta.class, prop.name);
-          const relationship =
-            relMetadata ??
-            ((prop as any).custom?.relationship as
-              | { type?: string; direction?: 'IN' | 'OUT' }
-              | undefined);
-          const relType = relationship?.type ?? prop.name.toUpperCase();
+          const relType =
+            Neo4jCypherBuilder.getRelationshipType(meta, prop) ?? prop.name.toUpperCase();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const propCustomDir = (prop as any).relation?.direction;
+          const direction: 'IN' | 'OUT' = propCustomDir ?? 'OUT';
           items.forEach((item: any) => {
             const idVal =
               typeof item === 'object' && item !== null
@@ -930,7 +672,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
             relations.push({
               prop,
               target: prop.type,
-              direction: relationship?.direction ?? 'OUT',
+              direction: direction ?? 'OUT',
               type: relType,
               value: idVal,
             });
@@ -1049,7 +791,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       value: unknown;
     }[],
     ctx?: Transaction,
-    replace = false,
+    _replace = false,
   ): Promise<void> {
     if (!relations.length) {
       return;
@@ -1093,22 +835,6 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       const { cypher: createCypher, params: createParams } = createQuery.build();
       await this.connection.executeRaw(createCypher, createParams, ctx);
     }
-  }
-
-  private convertNeo4jValue(value: any): any {
-    // Convert Neo4j Integer objects to JavaScript numbers
-    if (value && typeof value === 'object' && 'low' in value && 'high' in value) {
-      return value.toNumber ? value.toNumber() : Number(value.low);
-    }
-    return value;
-  }
-
-  private convertNeo4jRecord(record: any): any {
-    const result: any = {};
-    for (const key in record) {
-      result[key] = this.convertNeo4jValue(record[key]);
-    }
-    return result;
   }
 
   private transformResult<T extends object>(meta: EntityMetadata<T>, node: any): QueryResult<T> {

@@ -19,6 +19,7 @@ export interface Neo4jConnectionOptions extends ConnectionOptions {
   password?: string;
   database?: string;
   driverOptions?: Record<string, unknown>;
+  defaultRelationshipName?: string;
 }
 
 export interface Neo4jTransactionContext extends Neo4jTx {
