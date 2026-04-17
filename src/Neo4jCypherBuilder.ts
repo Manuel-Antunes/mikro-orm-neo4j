@@ -1,43 +1,37 @@
 import { type EntityMetadata, type EntityProperty, ReferenceKind } from '@mikro-orm/core';
 
 /** Helper: read Neo4j-specific metadata stored on MikroORM properties. */
-function readPropertyOption(obj: unknown): Record<string, unknown> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ((obj as any).relation as Record<string, unknown>) ?? {};
-}
-
-/** Helper: read Neo4j-specific metadata stored on MikroORM entities. */
-function readEntityOption(obj: unknown): Record<string, unknown> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ((obj as any).neo4j as Record<string, unknown>) ?? {};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readPropertyOption(obj: EntityProperty<any, any>): Record<string, unknown> {
+  return (obj.relationship as Record<string, unknown>) ?? {};
 }
 
 /**
  * Utility class for extracting Neo4j-specific metadata from MikroORM entity metadata.
- * Reads from `relation: { type, direction }` on @ManyToOne/ManyToMany options and `neo4j: { labels, relationshipEntity, type }` on @Entity().
+ * Reads from `relationship: { type, direction }` on @ManyToOne/ManyToMany options and `labels: string[]`, `relationship: boolean | { type: string }` on @Entity().
  */
 export class Neo4jCypherBuilder {
   /**
    * Extracts Neo4j labels from entity metadata.
-   * Primary label is the collection name; additional labels come from `neo4j.labels`.
+   * Primary label is the explicitly configured name/collection or falls back to className.
+   * Additional labels come from `labels`.
    */
   static getNodeLabels<T extends object>(meta: EntityMetadata<T>): string[] {
-    // `collection` is set after full metadata discovery; for defineEntity schemas used
-    // before discovery completes, fall back to the lowercased className.
-    const primaryLabel = meta.collection ?? meta.className.toLowerCase();
-    const labels = [primaryLabel];
-    const additionalLabels = readEntityOption(meta).labels;
+    const primaryLabel = meta.collection ?? meta.className;
+    const labelsSet = new Set<string>();
+    labelsSet.add(primaryLabel);
 
+    const additionalLabels = meta.labels;
     if (additionalLabels && Array.isArray(additionalLabels)) {
-      labels.push(...(additionalLabels as string[]));
+      additionalLabels.forEach((label) => labelsSet.add(label));
     }
 
-    return labels;
+    return Array.from(labelsSet);
   }
 
   /**
    * Gets the relationship type from property custom options or falls back to the property name.
-   * Reads `relation.type` from the property metadata.
+   * Reads `relationship.type` from the property metadata.
    * For ManyToMany with a pivot entity, falls back to the pivot entity name uppercased.
    */
   static getRelationshipType<T extends object>(
@@ -76,7 +70,7 @@ export class Neo4jCypherBuilder {
 
   /**
    * Gets the relationship direction from property relation payload.
-   * Not used directly when direction is passed through property.relation — kept for API compatibility.
+   * Not used directly when direction is passed through property.relationship — kept for API compatibility.
    */
   static getRelationshipDirection(
     _sourceEntity: object,
@@ -87,21 +81,22 @@ export class Neo4jCypherBuilder {
 
   /**
    * Checks if an entity is a relationship entity (pivot entity used for relationship properties).
-   * Detected via `meta.pivotTable` flag set by MikroORM, or via `neo4j.relationshipEntity: true`.
+   * Detected via `meta.pivotTable` flag set by MikroORM, or via `relationship: true | { ... }`.
    */
   static isRelationshipEntity<T extends object>(meta: EntityMetadata<T>): boolean {
-    return !!meta.pivotTable || readEntityOption(meta).relationshipEntity === true;
+    const rel = meta.relationship;
+    return !!meta.pivotTable || rel === true || (typeof rel === 'object' && rel !== null);
   }
 
   /**
    * Gets the relationship type string for a relationship entity (pivot).
-   * Reads `neo4j.type`, falls back to collection name uppercased.
+   * Reads `relationship.type`, falls back to `meta.name` or `meta.collection` uppercased.
    */
   static getRelationshipEntityType<T extends object>(meta: EntityMetadata<T>): string {
-    const neo4j = readEntityOption(meta);
-    return (
-      (typeof neo4j.type === 'string' ? neo4j.type : undefined) ?? meta.collection.toUpperCase()
-    );
+    const rel = meta.relationship;
+    const type = typeof rel === 'object' && rel !== null ? rel.type : undefined;
+    const fallback = meta.name ?? meta.collection;
+    return type ?? fallback.toUpperCase();
   }
 
   /**

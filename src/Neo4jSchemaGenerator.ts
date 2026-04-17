@@ -9,7 +9,7 @@ import {
   type RefreshDatabaseOptions,
   type UpdateSchemaOptions,
 } from '@mikro-orm/core';
-import type { Neo4jDriver } from './Neo4jDriver';
+import type { Neo4jDriver } from './Neo4jDriver.js';
 
 export class Neo4jSchemaGenerator implements ISchemaGenerator {
   private readonly driver: Neo4jDriver;

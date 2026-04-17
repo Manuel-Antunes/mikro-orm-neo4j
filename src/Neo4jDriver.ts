@@ -25,11 +25,11 @@ import {
   type AnyEntity,
   Collection,
 } from '@mikro-orm/core';
-import { Neo4jConnection } from './Neo4jConnection';
-import { Neo4jPlatform } from './Neo4jPlatform';
-import { Neo4jEntityManager } from './Neo4jEntityManager';
-import { Neo4jCypherBuilder } from './Neo4jCypherBuilder';
-import { Neo4jCypherUtils } from './Neo4jCypherUtils';
+import { Neo4jConnection } from './Neo4jConnection.js';
+import { Neo4jPlatform } from './Neo4jPlatform.js';
+import { Neo4jEntityManager } from './Neo4jEntityManager.js';
+import { Neo4jCypherBuilder } from './Neo4jCypherBuilder.js';
+import { Neo4jCypherUtils } from './Neo4jCypherUtils.js';
 import Cypher from '@neo4j/cypher-builder';
 
 interface Neo4jQueryOptions<T> {
@@ -45,9 +45,11 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
 
   protected override readonly connection = new Neo4jConnection(this.config);
   protected override readonly platform = new Neo4jPlatform();
+  protected override readonly replicas: Neo4jConnection[] = [];
 
   constructor(config: Configuration) {
     super(config, ['neo4j-driver']);
+    this.replicas = this.createReplicas((conf) => new Neo4jConnection(this.config, conf, 'read'));
   }
 
   override createEntityManager(useContext?: boolean): this[typeof EntityManagerType] {
@@ -223,7 +225,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     // Get the node from the first key in the record
     const resultNode = res.records[0]?.get(res.records[0]?.keys[0]);
     if (resultNode && payload.relations.length) {
-      const idValue = Neo4jCypherUtils.convertNeo4jValue(resultNode.properties?.id);
+      const idValue = Neo4jCypherUtils.convertNeo4jValue(resultNode.properties?.id) as string;
       await this.persistRelations(meta, idValue, payload.relations, options.ctx, true);
     }
     return resultNode
@@ -292,15 +294,27 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
         ? meta.expression(this.createEntityManager(), where as any, options as any)
         : meta.expression;
 
-    const { cypher, params = {} } =
-      typeof exprResult === 'string'
-        ? { cypher: exprResult, params: {} }
-        : (exprResult as { cypher: string; params?: Dictionary });
+    let cypher: string;
+    let params: Dictionary = {};
+
+    if (typeof exprResult === 'string') {
+      cypher = exprResult;
+    } else if (exprResult && typeof (exprResult as any).build === 'function') {
+      const built = (exprResult as any).build();
+      cypher = built.cypher;
+      params = built.params || {};
+    } else {
+      throw new Error(
+        `Virtual entity ${entityName} expression MUST return a string or a QueryBuilder instance. ` +
+          `Legacy object return { cypher, params } is no longer supported.`,
+      );
+    }
+
     const res = await this.connection.executeRaw(cypher, params, options.ctx);
     return res.records.map((r: any) => {
       const obj = r.get ? r.get('node') : r.toObject();
       const converted = Neo4jCypherUtils.convertNeo4jRecord(obj);
-      return this.mapResult(converted, meta) as EntityData<T>;
+      return this.mapResult(converted as EntityDictionary<T>, meta) as EntityData<T>;
     });
   }
 
@@ -439,7 +453,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     const props = node.properties ?? node;
     // Convert Neo4j types before mapping
     const converted = Neo4jCypherUtils.convertNeo4jRecord(props);
-    return this.mapResult(converted, meta) as EntityData<T>;
+    return this.mapResult(converted as EntityDictionary<T>, meta) as EntityData<T>;
   }
 
   private buildMatchWithPopulate<T extends object>(
@@ -462,8 +476,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
         }
 
         const relType = Neo4jCypherBuilder.getRelationshipType(meta, prop);
-        // Read direction from property relation metadata
-        const propCustom = (prop as any).relation;
+        const propCustom = (prop as any).relationship;
         const direction: 'IN' | 'OUT' | undefined = propCustom?.direction ?? undefined;
         const targetLabels = prop.targetMeta
           ? Neo4jCypherBuilder.getNodeLabels(prop.targetMeta)
@@ -640,7 +653,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
           const relType =
             Neo4jCypherBuilder.getRelationshipType(meta, prop) ?? prop.name.toUpperCase();
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const propCustomDir = (prop as any).relation?.direction;
+          const propCustomDir = (prop as any).relationship?.direction;
           const direction: 'IN' | 'OUT' = propCustomDir ?? 'OUT';
           relations.push({
             prop,
@@ -662,7 +675,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
           const relType =
             Neo4jCypherBuilder.getRelationshipType(meta, prop) ?? prop.name.toUpperCase();
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const propCustomDir = (prop as any).relation?.direction;
+          const propCustomDir = (prop as any).relationship?.direction;
           const direction: 'IN' | 'OUT' = propCustomDir ?? 'OUT';
           items.forEach((item: any) => {
             const idVal =

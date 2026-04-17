@@ -1,6 +1,6 @@
 import { EntityRepository, type EntityName } from '@mikro-orm/core';
-import type { Neo4jEntityManager } from './Neo4jEntityManager';
-import { Neo4jQueryBuilder } from './Neo4jQueryBuilder';
+import type { Neo4jEntityManager } from './Neo4jEntityManager.js';
+import { Neo4jQueryBuilder } from './Neo4jQueryBuilder.js';
 
 export class Neo4jEntityRepository<T extends object> extends EntityRepository<T> {
   constructor(
@@ -44,8 +44,8 @@ export class Neo4jEntityRepository<T extends object> extends EntityRepository<T>
    *   .execute();
    * ```
    */
-  createQueryBuilder(_alias?: string): Neo4jQueryBuilder<T> {
-    return new Neo4jQueryBuilder<T>(this.entityName, this.em);
+  createQueryBuilder(alias?: string): Neo4jQueryBuilder<T> {
+    return new Neo4jQueryBuilder<T>(this.entityName, this.em, alias);
   }
 
   override getEntityManager(): Neo4jEntityManager {

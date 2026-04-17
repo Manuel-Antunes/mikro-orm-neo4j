@@ -1,15 +1,40 @@
 import * as Cypher from '@neo4j/cypher-builder';
-import type { EntityName, EntityClass, FilterQuery } from '@mikro-orm/core';
-import type { Neo4jEntityManager } from './Neo4jEntityManager';
-import { Neo4jCypherBuilder } from './Neo4jCypherBuilder';
-import { Neo4jCypherUtils } from './Neo4jCypherUtils';
+import {
+  type AnyEntity,
+  type EntityName,
+  type EntityClass,
+  type EntityMetadata,
+  type FilterQuery,
+  type QueryOrderMap,
+  ReferenceKind,
+  type EntityKey,
+  type QueryOrder,
+} from '@mikro-orm/core';
+import type { Neo4jEntityManager } from './Neo4jEntityManager.js';
+import { Neo4jCypherBuilder } from './Neo4jCypherBuilder.js';
+import { Neo4jCypherUtils } from './Neo4jCypherUtils.js';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export interface QueryBuilderResult<T = any> {
+/**
+ * Internal helper for methods that can be called on most Cypher clauses.
+ * @neo4j/cypher-builder doesn't always expose these on the base Clause class.
+ */
+type Chainable = Cypher.Clause & {
+  where?(predicate: Cypher.Predicate): Chainable;
+  return?(...args: unknown[]): Chainable;
+  with?(...args: unknown[]): Chainable;
+  limit?(value: number | Cypher.Param): Chainable;
+  skip?(value: number | Cypher.Param): Chainable;
+  orderBy?(...args: unknown[]): Chainable;
+  set?(...args: unknown[]): Chainable;
+  delete?(...args: unknown[]): Chainable;
+  detachDelete?(...args: unknown[]): Chainable;
+  concat?(clause: Cypher.Clause): Chainable;
+};
+
+export interface QueryBuilderResult<Entity = object> {
   cypher: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  params: Record<string, any>;
-  execute?: () => Promise<T[]>;
+  params: Record<string, unknown>;
+  execute?: () => Promise<Entity[]>;
 }
 
 export interface RelationshipOptions {
@@ -19,9 +44,10 @@ export interface RelationshipOptions {
   /** Target entity class - will extract labels from entity metadata */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   targetEntity?: EntityClass<any>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  properties?: Record<string, any>;
+  properties?: Record<string, unknown>;
   variable?: Cypher.Relationship;
+  /** Alias to use for the target node in the query */
+  alias?: string;
   length?: number | { min?: number; max?: number } | '*';
 }
 
@@ -64,45 +90,73 @@ export interface CallOptions {
  *   .execute();
  * ```
  */
-export class Neo4jQueryBuilder<T = any> {
+export class Neo4jQueryBuilder<
+  Entity extends object = AnyEntity,
+  RootAlias extends string = never,
+  Hint extends string = never,
+  Context extends object = never,
+  RawAliases extends string = never,
+  Fields extends string = '*',
+> {
   private node: Cypher.Node;
   private _pattern?: Cypher.Pattern;
-  private clause?: any;
-  private readonly em?: Neo4jEntityManager;
-
-  private readonly labels?: string[];
-
+  private clause?: Chainable;
+  private labels: string[] = [];
+  private readonly meta?: EntityMetadata<Entity>;
   // Store query parts separately for flexible composition
   private clauseType?: 'match' | 'create' | 'merge';
-  private wherePredicates: any[] = [];
+  private wherePredicates: Cypher.Predicate[] = [];
   private returnProperties?: string[] | null;
-  private orderByItems: { property: string; direction: 'ASC' | 'DESC' }[] = [];
+  private returnMap: Record<string, string> | null = null;
+  private returnAlias: string | null = null;
+  private orderByOperations: { property: string; direction: 'ASC' | 'DESC' }[] = [];
   private limitValue?: number;
   private skipValue?: number;
-  private setOperations: Record<string, any> = {};
+  private setOperations: Record<string, unknown> = {};
   private deleteOperation?: { detach: boolean };
+  private readonly variables = new Map<string, Cypher.Variable>();
 
-  constructor(entityName?: EntityName<T>, em?: Neo4jEntityManager) {
-    this.em = em;
-    this.node = new Cypher.Node();
-
+  constructor(
+    private readonly entityName?: EntityName<Entity>,
+    private readonly em?: Neo4jEntityManager,
+    private readonly alias?: string,
+  ) {
     // Extract labels from entity name if provided
-    if (entityName) {
-      if (em) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const meta = em.getMetadata().find(entityName as any);
-        if (meta) {
-          // Use getNodeLabels which reads collection + custom.labels
-          this.labels = Neo4jCypherBuilder.getNodeLabels(meta);
-        }
+    if (this.entityName && this.em) {
+      this.meta = this.em.getMetadata().find(this.entityName as EntityName<Entity>);
+      if (this.meta) {
+        // Use getNodeLabels which reads collection + custom.labels
+        this.labels = Neo4jCypherBuilder.getNodeLabels(this.meta);
+      }
+    }
+
+    // Fallback when no EM or meta is available, or meta lookup failed
+    if (this.labels.length === 0 && this.entityName) {
+      // Handle schema objects or classes/strings
+      let labelString: string | undefined;
+
+      if (typeof this.entityName === 'string') {
+        labelString = this.entityName;
+      } else if (typeof this.entityName === 'function') {
+        labelString = this.entityName.name;
+      } else if (typeof this.entityName === 'object' && this.entityName !== null) {
+        // Handle EntitySchema or other descriptors
+        labelString =
+          (this.entityName as { name?: string }).name ||
+          (this.entityName as { className?: string }).className;
       }
 
-      // Fallback when no EM or meta is available
-      if (!this.labels) {
-        const labelString =
-          typeof entityName === 'string' ? entityName : (entityName.name as string);
-        this.labels = [labelString];
+      if (labelString) {
+        // MikroORM defaults to lowercased entity names as labels/collection names
+        this.labels = [labelString.toLowerCase()];
       }
+    }
+
+    if (this.alias) {
+      this.node = new Cypher.NamedNode(this.alias);
+      this.variables.set(this.alias, this.node);
+    } else {
+      this.node = new Cypher.Node();
     }
   }
 
@@ -116,30 +170,67 @@ export class Neo4jQueryBuilder<T = any> {
    */
   match(): this {
     this.clauseType = 'match';
-    this._pattern = new Cypher.Pattern(this.node, {
-      labels: this.labels,
-    });
-    this.clause = new Cypher.Match(this._pattern);
+    this.clause = new Cypher.Match(
+      new Cypher.Pattern(this.node, { labels: this.labels }),
+    ) as unknown as Chainable;
     return this;
   }
 
   /**
-   * Creates a CREATE clause to create new nodes in the graph.
-   *
-   * @param properties - Optional properties for the node
-   * @example
-   * ```typescript
-   * qb.create({ title: 'Inception', released: 2010 })
-   * ```
+   * Sets the fields to be returned by the query.
+   * Alias for return() in Neo4jQueryBuilder but with standard MikroORM signature.
    */
-  create(properties?: Record<string, any>): this {
+  select<F extends string = Fields, TRoot extends string = RootAlias>(
+    fields: F | F[] | Record<string, string>,
+    alias?: TRoot,
+  ): Neo4jQueryBuilder<Entity, TRoot, Hint, Context, RawAliases, F> {
+    if (Array.isArray(fields)) {
+      this.returnProperties = fields as string[];
+    } else if (typeof fields === 'object' && fields !== null) {
+      this.returnMap = fields as Record<string, string>;
+    } else if (typeof fields === 'string' && fields !== '*') {
+      this.returnProperties = [fields];
+    } else if (fields === '*') {
+      this.returnProperties = null; // null means RETURN node (the whole thing)
+    }
+
+    if (alias) {
+      this.returnAlias = alias as string;
+    }
+
+    return this as unknown as Neo4jQueryBuilder<Entity, TRoot, Hint, Context, RawAliases, F>;
+  }
+
+  /**
+   * Sets the root entity and alias for the query.
+   * Shortcut for match() with alias.
+   */
+  from<TRoot extends string = RootAlias>(
+    entityName: EntityName<Entity>,
+    alias?: TRoot,
+  ): Neo4jQueryBuilder<Entity, TRoot, Hint, Context, RawAliases, Fields> {
+    this.match();
+    if (alias) {
+      // In Cypher builder, labels are applied to the node, and the node is used in patterns.
+      // We already created the node in match().
+      this.variables.set(alias, this.node);
+    }
+    return this as unknown as Neo4jQueryBuilder<Entity, TRoot, Hint, Context, RawAliases, Fields>;
+  }
+
+  create(properties?: Record<string, unknown>): this {
     this.clauseType = 'create';
-    const nodeOptions: any = { labels: this.labels };
+    const nodeOptions: {
+      labels: string[];
+      properties?: Record<string, Cypher.Param>;
+    } = {
+      labels: this.labels,
+    };
     if (properties) {
       nodeOptions.properties = this.convertPropertiesToParams(properties);
     }
     this._pattern = new Cypher.Pattern(this.node, nodeOptions);
-    this.clause = new Cypher.Create(this._pattern);
+    this.clause = new Cypher.Create(this._pattern) as unknown as Chainable;
     return this;
   }
 
@@ -152,117 +243,180 @@ export class Neo4jQueryBuilder<T = any> {
    * qb.merge({ title: 'The Matrix' })
    * ```
    */
-  merge(properties?: Record<string, any>): this {
+  merge(properties?: Record<string, unknown>): this {
     this.clauseType = 'merge';
-    const nodeOptions: any = { labels: this.labels };
+    const nodeOptions: { labels: string[]; properties?: Record<string, Cypher.Param> } = {
+      labels: this.labels,
+    };
     if (properties) {
       nodeOptions.properties = this.convertPropertiesToParams(properties);
     }
     this._pattern = new Cypher.Pattern(this.node, nodeOptions);
-    this.clause = new Cypher.Merge(this._pattern);
+    this.clause = new Cypher.Merge(this._pattern) as unknown as Chainable;
     return this;
   }
 
   /**
-   * Adds a WHERE clause to filter results.
-   *
-   * @param propertyOrPredicate - Property name or Cypher predicate
-   * @param value - Value to compare (if propertyOrPredicate is a string)
-   * @example
-   * ```typescript
-   * qb.match().where('title', 'The Matrix')
-   * // or with custom predicate
-   * const titleProp = node.property('title');
-   * qb.match().where(Cypher.eq(titleProp, new Cypher.Param('The Matrix')))
-   * ```
+   * Adds WHERE conditions to the query.
+   * Supports both simple property-value pairs and complex FilterQuery objects.
    */
-  where(propertyOrPredicate: string | any, value?: any): this {
+  where(where: FilterQuery<Entity>): this;
+  where<K extends EntityKey<Entity>>(property: K | string, value: unknown): this;
+  where(predicate: Cypher.Predicate): this;
+  where(
+    propertyOrPredicate: string | FilterQuery<Entity> | Cypher.Predicate,
+    value?: unknown,
+  ): this {
     if (!this.clauseType) {
       throw new Error('Cannot add WHERE clause without a MATCH, CREATE, or MERGE clause');
     }
 
-    let predicate: any;
-    if (typeof propertyOrPredicate === 'string') {
-      const prop = this.node.property(propertyOrPredicate);
-      predicate = Cypher.eq(prop, new Cypher.Param(value));
-    } else {
-      predicate = propertyOrPredicate;
+    const isPlainObject = (obj: unknown): obj is Record<string, unknown> =>
+      obj !== null &&
+      typeof obj === 'object' &&
+      Object.prototype.toString.call(obj) === '[object Object]' &&
+      Object.getPrototypeOf(obj) === Object.prototype;
+
+    if (isPlainObject(propertyOrPredicate)) {
+      // It's a FilterQuery
+      return this.whereFilter(propertyOrPredicate as FilterQuery<Entity>);
     }
 
-    this.wherePredicates.push(predicate);
+    if (typeof propertyOrPredicate === 'string') {
+      const prop = this.resolvePropertyPath(propertyOrPredicate);
+      if (value !== undefined) {
+        this.wherePredicates.push(Cypher.eq(prop, new Cypher.Param(value)));
+      } else {
+        // Simple property existence check: WHERE node.prop IS NOT NULL
+        this.wherePredicates.push(Cypher.isNotNull(prop));
+      }
+    } else if (
+      propertyOrPredicate instanceof Cypher.Variable ||
+      (propertyOrPredicate as Cypher.Predicate).getCypher
+    ) {
+      // It's a Cypher Predicate or Variable that can act as one
+      this.wherePredicates.push(propertyOrPredicate as Cypher.Predicate);
+    }
+
     return this;
   }
 
   /**
-   * Adds an AND condition to the WHERE clause.
-   *
-   * @param propertyOrPredicate - Property name or Cypher predicate
-   * @param value - Value to compare (if propertyOrPredicate is a string)
-   * @example
-   * ```typescript
-   * qb.match().where('title', 'The Matrix').and('released', 1999)
-   * ```
+   * Adds a JOIN (MATCH pattern) to the query.
    */
-  and(propertyOrPredicate: string | any, value?: any): this {
-    if (this.wherePredicates.length === 0) {
-      throw new Error('Cannot add AND clause without a WHERE clause');
-    }
+  join<K extends string = never>(
+    property: K,
+    alias: string,
+    type: 'left' | 'inner' = 'inner',
+  ): this {
+    const direction = type === 'left' ? 'undirected' : 'right'; // Default to 'right' for inner join if not specified
+    // Cast property to string as related() handles both strings and classes
+    return this.related(property as string, { alias, direction });
+  }
 
-    let predicate: any;
-    if (typeof propertyOrPredicate === 'string') {
-      const prop = this.node.property(propertyOrPredicate);
-      predicate = Cypher.eq(prop, new Cypher.Param(value));
-    } else {
-      predicate = propertyOrPredicate;
-    }
+  innerJoin<K extends string = never>(property: K, alias: string): this {
+    return this.join(property, alias, 'inner');
+  }
 
-    this.wherePredicates.push(predicate);
-    return this;
+  leftJoin<K extends string = never>(property: K, alias: string): this {
+    return this.join(property, alias, 'left');
   }
 
   /**
-   * Adds an OR condition to the WHERE clause using Cypher.or.
-   *
-   * @param predicates - Array of predicates to combine with OR
-   * @example
-   * ```typescript
-   * const title1 = Cypher.eq(node.property('title'), new Cypher.Param('The Matrix'));
-   * const title2 = Cypher.eq(node.property('title'), new Cypher.Param('Inception'));
-   * qb.match().where(Cypher.or(title1, title2))
-   * ```
+   * Alias for andWhere()
    */
-  or(...predicates: any[]): this {
-    if (!this.clauseType) {
-      throw new Error('Cannot add OR clause without a WHERE clause');
-    }
+  and<K extends EntityKey<Entity>>(property: K | string, value: unknown): this;
+  and(propertyOrPredicate: string | FilterQuery<Entity>, value?: unknown): this {
+    return this.andWhere(propertyOrPredicate as string, value);
+  }
 
-    const orPredicate = Cypher.or(...predicates);
-    this.wherePredicates.push(orPredicate);
+  /**
+   * Adds an AND condition to the WHERE clause using MikroORM-style FilterQuery.
+   */
+  andWhere(where: FilterQuery<Entity>): this;
+  andWhere<K extends EntityKey<Entity>>(property: K | string, value: unknown): this;
+  andWhere(propertyOrPredicate: string | FilterQuery<Entity>, value?: unknown): this {
+    return this.where(propertyOrPredicate as string, value);
+  }
+
+  /**
+   * Alias for orWhere()
+   */
+  or(where: FilterQuery<Entity>): this;
+  or<K extends EntityKey<Entity>>(property: K | string, value: unknown): this;
+  or(propertyOrPredicate: string | FilterQuery<Entity>, value?: unknown): this {
+    return this.orWhere(propertyOrPredicate as string, value);
+  }
+
+  orWhere(where: FilterQuery<Entity>): this;
+  orWhere<K extends EntityKey<Entity>>(property: K | string, value: unknown): this;
+  orWhere(propertyOrPredicate: string | FilterQuery<Entity>, value?: unknown): this {
+    if (this.wherePredicates.length > 0) {
+      const last = this.wherePredicates.pop()!;
+      let current: Cypher.Predicate;
+
+      const isPlainObject = (obj: unknown): obj is Record<string, unknown> =>
+        obj !== null &&
+        typeof obj === 'object' &&
+        Object.prototype.toString.call(obj) === '[object Object]' &&
+        Object.getPrototypeOf(obj) === Object.prototype;
+
+      if (typeof propertyOrPredicate === 'string') {
+        const prop = this.resolvePropertyPath(propertyOrPredicate);
+        current = Cypher.eq(prop, new Cypher.Param(value));
+      } else if (isPlainObject(propertyOrPredicate)) {
+        const clauses = Neo4jCypherUtils.buildWhereClauses(
+          this.node,
+          propertyOrPredicate as FilterQuery<Entity>,
+        );
+        if (clauses.length === 0) {
+          this.wherePredicates.push(last);
+          return this;
+        }
+
+        const predicate = clauses.length > 1 ? Cypher.and(...clauses) : clauses[0];
+        if (!predicate) {
+          this.wherePredicates.push(last);
+          return this;
+        }
+        current = predicate;
+      } else {
+        // Safe cast for Cypher Predicate
+        current = propertyOrPredicate as unknown as Cypher.Predicate;
+      }
+
+      this.wherePredicates.push(Cypher.or(last, current));
+    } else {
+      this.where(propertyOrPredicate as unknown as Cypher.Predicate);
+    }
     return this;
   }
 
   /**
    * Adds WHERE conditions using MikroORM-style FilterQuery syntax.
-   * This allows using the same filter format as `em.find()` in the QueryBuilder.
-   *
-   * Supports operators: `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$and`, `$or`.
-   *
-   * @param filter - MikroORM-style filter query object
-   * @example
-   * ```typescript
-   * // Simple equality
-   * qb.match().whereFilter({ title: 'The Matrix' })
-   *
-   * // With operators
-   * qb.match().whereFilter({ released: { $gte: 2000 }, title: 'Inception' })
-   *
-   * // With $or
-   * qb.match().whereFilter({ $or: [{ title: 'The Matrix' }, { title: 'Inception' }] })
-   * ```
    */
-  whereFilter<Entity extends object = any>(filter: FilterQuery<Entity>): this {
-    const predicates = Neo4jCypherUtils.buildWhereClauses(this.node, filter);
-    this.wherePredicates.push(...predicates);
+  whereFilter(filter: FilterQuery<Entity>): this {
+    const isPlainObject = (obj: unknown): obj is Record<string, unknown> =>
+      obj !== null &&
+      typeof obj === 'object' &&
+      Object.prototype.toString.call(obj) === '[object Object]' &&
+      Object.getPrototypeOf(obj) === Object.prototype;
+
+    if (!isPlainObject(filter)) {
+      // If it's a Cypher predicate, use it
+      if ((filter as any).getCypher) {
+        this.wherePredicates.push(filter as unknown as Cypher.Predicate);
+      }
+      return this;
+    }
+
+    const clauses = Neo4jCypherUtils.buildWhereClauses(this.node, filter as FilterQuery<Entity>);
+    if (clauses.length > 0) {
+      const predicate = Cypher.and(...clauses);
+      if (predicate) {
+        this.wherePredicates.push(predicate);
+      }
+    }
     return this;
   }
 
@@ -277,78 +431,107 @@ export class Neo4jQueryBuilder<T = any> {
    * qb.match().return() // returns the entire node
    * ```
    */
-  return(properties?: string[] | string): this {
+  return<F extends string = Fields>(
+    properties?: F | F[] | EntityKey<Entity>[] | (string & {})[] | Record<string, string> | null,
+    alias?: string,
+  ): Neo4jQueryBuilder<Entity, RootAlias, Hint, Context, RawAliases, F> {
     if (!this.clauseType) {
       throw new Error('Cannot add RETURN clause without a query clause');
     }
 
-    if (!properties) {
-      this.returnProperties = null; // null means return entire node
+    if (properties) {
+      if (typeof properties === 'string') {
+        this.returnProperties = [properties];
+        this.returnMap = null;
+      } else if (Array.isArray(properties)) {
+        this.returnProperties = properties as string[];
+        this.returnMap = null;
+      } else {
+        this.returnProperties = null;
+        this.returnMap = properties as Record<string, string>;
+      }
     } else {
-      this.returnProperties = Array.isArray(properties) ? properties : [properties];
+      this.returnProperties = null;
+      this.returnMap = null;
     }
 
+    if (alias) {
+      this.returnAlias = alias;
+    }
+
+    return this as unknown as Neo4jQueryBuilder<Entity, RootAlias, Hint, Context, RawAliases, F>;
+  }
+
+  /**
+   * Aliases the entire return clause.
+   * Useful for virtual entities which expect the result to be under a specific key (e.g., 'node').
+   *
+   * @param alias - The alias name
+   * @example
+   * ```typescript
+   * qb.match().return({ name: 'n.name' }).as('node')
+   * // Matches: RETURN { name: n.name } AS node
+   * ```
+   */
+  as(alias: string): this {
+    this.returnAlias = alias;
     return this;
   }
 
   /**
-   * Adds an ORDER BY clause.
-   * Can be called in any order - will be applied correctly during build().
-   *
-   * @param property - Property to order by
-   * @param direction - Sort direction ('ASC' or 'DESC')
-   * @example
-   * ```typescript
-   * qb.match().orderBy('released', 'DESC').return()
-   * // or
-   * qb.match().return().orderBy('released', 'DESC')
-   * ```
+   * Adds sorting to the query result.
    */
-  orderBy(property: string, direction: 'ASC' | 'DESC' = 'ASC'): this {
-    if (!this.clauseType) {
-      throw new Error('Cannot add ORDER BY clause without a query clause');
+  orderBy(
+    property: EntityKey<Entity> | string | QueryOrderMap<Entity> | QueryOrderMap<Entity>[],
+    direction: QueryOrder | 'ASC' | 'DESC' | (string & {}) = 'ASC',
+  ): this {
+    if (typeof property === 'string') {
+      this.orderByOperations.push({
+        property,
+        direction: (String(direction).toUpperCase() === 'DESC' ? 'DESC' : 'ASC') as 'ASC' | 'DESC',
+      });
+    } else {
+      const orders = Array.isArray(property) ? property : [property];
+      orders.forEach((order) => {
+        Object.entries(order).forEach(([prop, dir]) => {
+          this.orderByOperations.push({
+            property: prop,
+            direction: (String(dir).toUpperCase() === 'DESC' ? 'DESC' : 'ASC') as 'ASC' | 'DESC',
+          });
+        });
+      });
     }
-
-    this.orderByItems.push({ property, direction });
     return this;
   }
 
   /**
-   * Adds a LIMIT clause.
-   * Can be called in any order - will be applied correctly during build().
-   *
-   * @param limit - Maximum number of results
-   * @example
-   * ```typescript
-   * qb.match().limit(10)
-   * ```
+   * Adds additional sorting to the query result.
    */
-  limit(limit: number): this {
-    if (!this.clauseType) {
-      throw new Error('Cannot add LIMIT clause without a query clause');
-    }
+  andOrderBy(
+    property: EntityKey<Entity> | string | QueryOrderMap<Entity> | QueryOrderMap<Entity>[],
+    direction: QueryOrder | 'ASC' | 'DESC' | (string & {}) = 'ASC',
+  ): this {
+    return this.orderBy(property, direction);
+  }
 
-    this.limitValue = limit;
+  /**
+   * Limits the number of results returned.
+   */
+  limit(value: number): this {
+    this.limitValue = value;
     return this;
   }
 
   /**
-   * Adds a SKIP clause.
-   * Can be called in any order - will be applied correctly during build().
-   *
-   * @param skip - Number of results to skip
-   * @example
-   * ```typescript
-   * qb.match().skip(20).limit(10) // pagination
-   * ```
+   * Skips a specified number of results.
    */
-  skip(skip: number): this {
-    if (!this.clauseType) {
-      throw new Error('Cannot add SKIP clause without a query clause');
-    }
-
-    this.skipValue = skip;
+  offset(value: number): this {
+    this.skipValue = value;
     return this;
+  }
+
+  skip(value: number): this {
+    return this.offset(value);
   }
 
   /**
@@ -380,7 +563,7 @@ export class Neo4jQueryBuilder<T = any> {
    * qb.match().where('title', 'The Matrix').set({ tagline: 'Welcome to the Real World' })
    * ```
    */
-  set(properties: Record<string, any>): this {
+  set(properties: Record<string, unknown>): this {
     if (!this.clauseType) {
       throw new Error('Cannot add SET clause without a query clause');
     }
@@ -414,7 +597,7 @@ export class Neo4jQueryBuilder<T = any> {
    * qb.match().related('ACTED_IN', { direction: 'left', targetLabel: 'Person' })
    *
    * // Legacy signature
-   * qb.match().related('ACTED_IN', 'left', 'Person')
+   * qb.match().related('ACTED_IN', 'left', 'Person', 'p')
    *
    * // With properties
    * qb.match().related('ACTED_IN', {
@@ -422,19 +605,14 @@ export class Neo4jQueryBuilder<T = any> {
    *   targetLabel: 'Person',
    *   properties: { since: 2020 }
    * })
-   *
-   * // With variable length
-   * qb.match().related('KNOWS', { length: { min: 1, max: 3 } })
-   *
-   * // Any length
-   * qb.match().related('KNOWS', { length: '*' })
-   * ```
+   * @param targetLabelOrEntity - Target node label or entity class to resolve labels
+   * @param alias - Optional alias for the target node (legacy)
    */
   related(
-    relationshipTypeOrProperty: string | EntityClass<any>,
-    optionsOrDirection?: RelationshipOptions | 'left' | 'right' | 'none' | string,
-    targetLabelOrEntity?: string | EntityClass<any>,
-    _relationshipAlias?: string,
+    relationshipTypeOrProperty: EntityName<AnyEntity> | string,
+    optionsOrDirection?: RelationshipOptions | 'left' | 'right' | 'undirected',
+    targetLabelOrEntity?: EntityName<AnyEntity>,
+    alias?: string,
   ): this {
     if (!this._pattern) {
       this._pattern = new Cypher.Pattern(this.node, { labels: this.labels });
@@ -444,117 +622,133 @@ export class Neo4jQueryBuilder<T = any> {
     let opts: RelationshipOptions;
 
     // Normalize defineEntity schema objects: { class: Constructor, meta: ... } → class constructor
-    if (
+    const schema =
+      relationshipTypeOrProperty &&
       typeof relationshipTypeOrProperty === 'object' &&
-      relationshipTypeOrProperty !== null &&
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      typeof (relationshipTypeOrProperty as any).class === 'function'
-    ) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      relationshipTypeOrProperty = (relationshipTypeOrProperty as any).class as EntityClass<any>;
+      'class' in relationshipTypeOrProperty
+        ? (relationshipTypeOrProperty as any)
+        : null;
+
+    if (schema) {
+      relationshipTypeOrProperty = (schema as any).class || schema;
     }
 
-    // Handle entity-based signature: related(EntityClass, 'propertyName')
-    // OR related(RelationshipEntityClass, options)
-    if (typeof relationshipTypeOrProperty === 'function') {
-      // Check if this is a relationship entity (has @RelationshipProperties)
-      const isRelEntity =
-        this.em &&
-        Neo4jCypherBuilder.isRelationshipEntity(
-          this.em.getMetadata().find(relationshipTypeOrProperty as any)!,
-        );
+    // Normalize targetLabelOrEntity if it's a schema
+    if (
+      typeof targetLabelOrEntity === 'object' &&
+      targetLabelOrEntity !== null &&
+      'class' in targetLabelOrEntity
+    ) {
+      targetLabelOrEntity = (targetLabelOrEntity as any).class as EntityClass<AnyEntity>;
+    }
 
-      if (isRelEntity) {
-        // Handle relationship entity class: related(FriendsWith, options)
-        const relMeta = this.em!.getMetadata().find(relationshipTypeOrProperty as any)!;
-        relationshipType = Neo4jCypherBuilder.getRelationshipEntityType(relMeta);
+    // ─── Resolve relationship type and options ───────────────────────────────
+    // We support several signatures:
+    // 1. related(RelationshipEntityClass, options)
+    // 2. related(NodeEntityClass, propertyName, targetLabel?, alias?)
+    // 3. related(type, direction, targetLabel?, alias?)
+    // 4. related(type, { options })
 
-        // Extract target entity from relationship entity's @ManyToOne properties
-        const [, targetProp] = Neo4jCypherBuilder.getRelationshipEntityEnds(relMeta);
+    if (
+      typeof relationshipTypeOrProperty === 'function' &&
+      this.em &&
+      Neo4jCypherBuilder.isRelationshipEntity(
+        this.em.getMetadata().find(relationshipTypeOrProperty as EntityName<AnyEntity>)!,
+      )
+    ) {
+      // 1. Handle relationship entity class: related(FriendsWith, options)
+      const relMeta = this.em
+        .getMetadata()
+        .find(relationshipTypeOrProperty as EntityName<AnyEntity>)!;
+      relationshipType = Neo4jCypherBuilder.getRelationshipEntityType(relMeta);
 
-        // Use options or default
-        const options = typeof optionsOrDirection === 'object' ? optionsOrDirection : {};
-        opts = {
-          direction: options.direction || 'right',
-          targetEntity: options.targetEntity || (targetProp.targetMeta?.class as EntityClass<any>),
-          properties: options.properties,
-          length: options.length,
-          variable: options.variable,
-        };
-      } else {
-        // Handle node entity with property: related(Movie, 'actors')
-        const sourceEntity = relationshipTypeOrProperty;
-        const propertyName = optionsOrDirection as string;
+      // Extract target entity from relationship entity's @ManyToOne properties
+      const [, targetProp] = Neo4jCypherBuilder.getRelationshipEntityEnds(relMeta);
 
-        // First try to get from entity metadata (property.custom)
-        let relType: string | undefined;
-        let cypherDirection: 'left' | 'right' | undefined;
+      const options = typeof optionsOrDirection === 'object' ? optionsOrDirection : {};
+      opts = {
+        direction: options.direction || 'right',
+        targetEntity:
+          options.targetEntity || (targetProp.targetMeta?.class as EntityClass<AnyEntity>),
+        properties: options.properties,
+        length: options.length,
+        variable: options.variable,
+      };
+    } else if (typeof relationshipTypeOrProperty === 'function') {
+      // 2. Handle node entity with property: related(Movie, 'actors')
+      const sourceEntity = relationshipTypeOrProperty;
+      const propertyName = optionsOrDirection as string;
 
-        if (this.em) {
-          const sourceMeta = this.em.getMetadata().find(sourceEntity as any);
-          const prop = sourceMeta?.properties[propertyName];
-          if (prop) {
-            const propCustom = (prop as any).relation;
-            if (propCustom?.type) {
-              relType = propCustom.type;
-            } else if (propCustom?.relType) {
-              relType = propCustom.relType;
+      let relType: string | undefined;
+      let cypherDirection: 'left' | 'right' | undefined;
+
+      if (this.em) {
+        const sourceMeta = this.em.getMetadata().find(sourceEntity as EntityName<AnyEntity>);
+        const prop = sourceMeta?.properties[propertyName as EntityKey<AnyEntity>];
+        if (prop) {
+          const propCustom = (
+            prop as {
+              relationship?: { type?: string; relType?: string; direction?: 'IN' | 'OUT' };
             }
-            if (propCustom?.direction) {
-              cypherDirection = propCustom.direction === 'IN' ? 'left' : 'right';
-            }
+          ).relationship;
+          if (propCustom?.type) {
+            relType = propCustom.type;
+          } else if (propCustom?.relType) {
+            relType = propCustom.relType;
+          }
+          if (propCustom?.direction) {
+            cypherDirection = propCustom.direction === 'IN' ? 'left' : 'right';
           }
         }
-
-        // Fallback to getRelationshipType (may read from old @Rel store if still present)
-        if (!relType) {
-          relType = Neo4jCypherBuilder.getRelationshipType(sourceEntity, propertyName, false);
-        }
-
-        if (!relType) {
-          throw new Error(
-            `No relationship metadata found on ${(sourceEntity as any).name}.${propertyName}. ` +
-              `Please use 'relation: { type, direction }' in your decorator options.`,
-          );
-        }
-        relationshipType = relType;
-
-        // Get target entity from metadata if available
-        let targetEntity: EntityClass<any> | undefined;
-        if (this.em && typeof targetLabelOrEntity !== 'string') {
-          const meta = this.em.getMetadata().find(sourceEntity as any);
-          const prop = meta?.properties[propertyName];
-          if (prop?.targetMeta) {
-            targetEntity = prop.targetMeta.class as EntityClass<any>;
-          }
-        }
-
-        opts = {
-          direction: cypherDirection,
-          targetEntity:
-            targetLabelOrEntity && typeof targetLabelOrEntity !== 'string'
-              ? (targetLabelOrEntity as EntityClass<any>)
-              : targetEntity,
-        };
       }
-      // Handle legacy signature: related(type, direction, targetLabel, alias)
+
+      if (!relType) {
+        relType = Neo4jCypherBuilder.getRelationshipType(sourceEntity, propertyName, false);
+      }
+
+      if (!relType) {
+        throw new Error(
+          `No relationship metadata found on ${(sourceEntity as EntityClass<AnyEntity>).name}.${propertyName}. ` +
+            `Please use 'relationship: { type, direction }' in your decorator options.`,
+        );
+      }
+      relationshipType = relType;
+
+      let targetEntity: EntityClass<AnyEntity> | undefined;
+      if (this.em && typeof targetLabelOrEntity !== 'string') {
+        const meta = this.em.getMetadata().find(sourceEntity as EntityName<AnyEntity>);
+        const prop = meta?.properties[propertyName as EntityKey<AnyEntity>];
+        if (prop?.targetMeta) {
+          targetEntity = prop.targetMeta.class as EntityClass<AnyEntity>;
+        }
+      }
+
+      opts = {
+        direction: cypherDirection,
+        targetEntity:
+          targetLabelOrEntity && typeof targetLabelOrEntity !== 'string'
+            ? (targetLabelOrEntity as EntityClass<AnyEntity>)
+            : (targetEntity as EntityClass<AnyEntity>),
+      };
     } else if (
       typeof optionsOrDirection === 'string' &&
       (optionsOrDirection === 'left' ||
         optionsOrDirection === 'right' ||
-        optionsOrDirection === 'none')
+        optionsOrDirection === 'undirected')
     ) {
-      relationshipType = relationshipTypeOrProperty;
+      // 3. Handle legacy signature: related(type, direction, targetLabel, alias)
+      relationshipType = relationshipTypeOrProperty as string;
       opts = {
-        direction: optionsOrDirection === 'none' ? 'undirected' : optionsOrDirection,
+        direction: optionsOrDirection as RelationshipOptions['direction'],
         targetLabel: typeof targetLabelOrEntity === 'string' ? targetLabelOrEntity : undefined,
         targetEntity:
-          typeof targetLabelOrEntity !== 'string'
-            ? (targetLabelOrEntity as EntityClass<any>)
+          targetLabelOrEntity && typeof targetLabelOrEntity !== 'string'
+            ? (targetLabelOrEntity as EntityClass<AnyEntity>)
             : undefined,
+        alias: alias,
       };
-      // Handle new signature: related('ACTED_IN', { options })
     } else {
+      // 4. Handle new signature: related('ACTED_IN', { options })
       relationshipType = relationshipTypeOrProperty as string;
       opts = (optionsOrDirection as RelationshipOptions) || {};
     }
@@ -562,39 +756,60 @@ export class Neo4jQueryBuilder<T = any> {
     const direction = opts.direction || 'right';
 
     const relationship = opts.variable || new Cypher.Relationship();
-    const relationshipOptions: any = { type: relationshipType, direction };
+    const relationshipOptions: {
+      type: string;
+      direction: 'left' | 'right' | 'undirected';
+      properties?: Record<string, Cypher.Param>;
+      length?: number | '*' | { min: number; max?: number };
+    } = {
+      type: relationshipType,
+      direction: direction as 'left' | 'right' | 'undirected',
+    };
 
     if (opts.properties) {
       relationshipOptions.properties = this.convertPropertiesToParams(opts.properties);
     }
 
     if (opts.length !== undefined) {
-      relationshipOptions.length = opts.length;
+      relationshipOptions.length = opts.length as number | '*' | { min: number; max?: number };
     }
 
-    // Extract target labels from entity class if provided
+    // Extract target labels
     let targetLabels: string[] | undefined;
-    if (opts.targetEntity) {
-      if (this.em) {
-        const meta = this.em.getMetadata().find(opts.targetEntity as any);
-        targetLabels = meta ? Neo4jCypherBuilder.getNodeLabels(meta) : undefined;
-      }
-      if (!targetLabels) {
-        const name =
-          typeof opts.targetEntity === 'function'
-            ? opts.targetEntity.name
-            : (opts.targetEntity as any).name;
-        targetLabels = [name];
-      }
+
+    // Use explicit targetLabels if provided
+    if (opts.targetLabels) {
+      targetLabels = opts.targetLabels;
     } else {
-      targetLabels = opts.targetLabels || (opts.targetLabel ? [opts.targetLabel] : undefined);
+      // Try to resolve from targetEntity (class or name) or targetLabel string
+      const entityToResolve = opts.targetEntity || opts.targetLabel;
+
+      if (entityToResolve) {
+        if (this.em) {
+          const meta = this.em.getMetadata().find(entityToResolve as EntityName<AnyEntity>);
+          if (meta) {
+            targetLabels = Neo4jCypherBuilder.getNodeLabels(meta);
+          }
+        }
+
+        // Fallback for string-based entities or raw labels
+        if (!targetLabels && typeof entityToResolve === 'string') {
+          targetLabels = [entityToResolve];
+        } else if (!targetLabels && typeof entityToResolve === 'function') {
+          targetLabels = [(entityToResolve as EntityClass<AnyEntity>).name];
+        }
+      }
     }
 
-    const targetNode = new Cypher.Node();
+    const targetNode = opts.alias ? new Cypher.NamedNode(opts.alias) : new Cypher.Node();
 
     this._pattern = this._pattern
       .related(relationship, relationshipOptions)
       .to(targetNode, targetLabels ? { labels: targetLabels } : undefined);
+
+    if (opts.alias) {
+      this.variables.set(opts.alias, targetNode);
+    }
 
     // Rebuild the clause with the new pattern
     if (this.clauseType === 'match') {
@@ -674,7 +889,9 @@ export class Neo4jQueryBuilder<T = any> {
       }
     }
 
-    this.clause = this.clause.with(...withItems);
+    if (this.clause && typeof this.clause.with === 'function') {
+      this.clause = this.clause.with(...withItems);
+    }
     return this;
   }
 
@@ -711,13 +928,13 @@ export class Neo4jQueryBuilder<T = any> {
   call(subquery: Neo4jQueryBuilder<any> | any, options?: CallOptions): this {
     const opts = options || {};
 
-    let subClause: any;
+    let subClause: Cypher.Clause;
     if (subquery instanceof Neo4jQueryBuilder) {
       // Build the subquery to get its clause
       subquery.build(); // This builds and stores the clause
-      subClause = subquery.clause;
+      subClause = subquery.clause as Cypher.Clause;
     } else {
-      subClause = subquery;
+      subClause = subquery as Cypher.Clause;
     }
 
     const importVars = opts.importVariables;
@@ -738,7 +955,7 @@ export class Neo4jQueryBuilder<T = any> {
       }
     }
 
-    if (this.clause) {
+    if (this.clause && typeof this.clause.concat === 'function') {
       // Chain with existing clause
       this.clause = this.clause.concat(callClause);
     } else {
@@ -770,7 +987,7 @@ export class Neo4jQueryBuilder<T = any> {
    *   .return(['name'])
    * ```
    */
-  exists(pattern: any): any {
+  exists(pattern: Cypher.Pattern): Cypher.Predicate {
     return new Cypher.Exists(pattern);
   }
 
@@ -793,7 +1010,7 @@ export class Neo4jQueryBuilder<T = any> {
    * qb.match().where(Cypher.gt(count, new Cypher.Param(5)))
    * ```
    */
-  count(pattern: any): any {
+  count(pattern: any): Cypher.Count {
     return new Cypher.Count(pattern);
   }
 
@@ -838,92 +1055,156 @@ export class Neo4jQueryBuilder<T = any> {
    * console.log(params); // { param0: 'The Matrix' }
    * ```
    */
-  build(): QueryBuilderResult<T> {
+  build(): QueryBuilderResult<Entity> {
     if (!this.clauseType) {
       throw new Error('Cannot build query without any clauses');
     }
 
     // Start with the base clause (MATCH, CREATE, or MERGE)
-    let clause = this.clause;
+    if (!this.clause) {
+      throw new Error('Base clause is undefined');
+    }
+
+    // Using any for assembly to avoid fighting with optional methods on re-assigned variables.
+    // The previous checks ensure the logic is safe.
+    let clause: any = this.clause;
 
     // Apply WHERE predicates if any
     if (this.wherePredicates.length > 0) {
-      // Combine all predicates with AND
-      let combinedPredicate = this.wherePredicates[0];
+      let combinedPredicate = this.wherePredicates[0] as unknown as Cypher.Predicate;
       for (let i = 1; i < this.wherePredicates.length; i++) {
-        combinedPredicate = Cypher.and(combinedPredicate, this.wherePredicates[i]);
+        combinedPredicate = Cypher.and(
+          combinedPredicate,
+          this.wherePredicates[i] as unknown as Cypher.Predicate,
+        );
       }
-      clause = clause.where(combinedPredicate);
+      if (clause.where) {
+        clause = clause.where(combinedPredicate);
+      }
     }
 
     // Apply SET operations if any
     if (Object.keys(this.setOperations).length > 0) {
       for (const [key, value] of Object.entries(this.setOperations)) {
         const prop = this.node.property(key);
-        clause = clause.set([prop, new Cypher.Param(value)]);
+        if (clause.set) {
+          clause = clause.set([prop, new Cypher.Param(value)]);
+        }
       }
     }
 
     // Apply DELETE if specified
     if (this.deleteOperation) {
-      if (this.deleteOperation.detach) {
+      if (this.deleteOperation.detach && clause.detachDelete) {
         clause = clause.detachDelete(this.node);
-      } else {
+      } else if (clause.delete) {
         clause = clause.delete(this.node);
       }
     }
 
-    // Apply RETURN clause
-    // RETURN must come before ORDER BY, SKIP, and LIMIT in Cypher
-    if (this.returnProperties !== undefined) {
-      if (this.returnProperties === null) {
-        clause = clause.return(this.node);
-      } else {
-        const returnExpressions = this.returnProperties.map((prop) => [
-          this.node.property(prop),
-          prop,
-        ]);
-        clause = clause.return(...returnExpressions);
+    if (this.returnMap !== null) {
+      const mapObj: Record<string, Cypher.Expr> = {};
+      for (const [key, value] of Object.entries(this.returnMap)) {
+        mapObj[key] = this.resolvePropertyPath(value);
       }
-    } else if (
-      this.orderByItems.length > 0 ||
-      this.limitValue !== undefined ||
-      this.skipValue !== undefined
-    ) {
-      // If ORDER BY, LIMIT, or SKIP is used without explicit RETURN, add default RETURN
-      clause = clause.return(this.node);
+      const mapExpr = new Cypher.Map(mapObj);
+      const returnArg = this.returnAlias ? [mapExpr, this.returnAlias] : mapExpr;
+      if (clause.return) {
+        clause = clause.return(returnArg);
+      }
+    } else if (this.returnProperties !== undefined) {
+      if (clause.return) {
+        if (this.returnProperties === null) {
+          const returnArg = this.returnAlias ? [this.node, this.returnAlias] : this.node;
+          clause = clause.return(returnArg);
+        } else {
+          const returnExpressions = this.returnProperties.map((prop) => [
+            this.node.property(prop),
+            prop as any,
+          ]);
+          clause = clause.return(...returnExpressions);
+        }
+      }
+    } else if (this.clauseType === 'match') {
+      // If no explicit RETURN, add default RETURN for read queries
+      if (clause.return) {
+        const returnArg = this.returnAlias ? [this.node, this.returnAlias] : this.node;
+        clause = clause.return(returnArg);
+      }
     }
 
     // Apply ORDER BY clauses
-    for (const { property, direction } of this.orderByItems) {
-      const prop = this.node.property(property);
-      const sortItem =
-        direction === 'DESC' ? ([prop, 'DESC'] as [any, 'DESC']) : ([prop, 'ASC'] as [any, 'ASC']);
-      clause = clause.orderBy(sortItem);
+    if (this.orderByOperations.length > 0 && clause.orderBy) {
+      for (const { property, direction } of this.orderByOperations) {
+        const prop = this.resolvePropertyPath(property);
+        const sortItem =
+          direction === 'DESC'
+            ? ([prop, 'DESC'] as [unknown, 'DESC'])
+            : ([prop, 'ASC'] as [unknown, 'ASC']);
+        clause = clause.orderBy(sortItem);
+      }
     }
 
     // Apply SKIP
-    if (this.skipValue !== undefined) {
+    if (this.skipValue !== undefined && clause.skip) {
       clause = clause.skip(this.skipValue);
     }
 
     // Apply LIMIT
-    if (this.limitValue !== undefined) {
+    if (this.limitValue !== undefined && clause.limit) {
       clause = clause.limit(this.limitValue);
     }
 
     const { cypher, params } = clause.build();
 
-    const result: QueryBuilderResult<T> = { cypher, params };
+    const result: QueryBuilderResult<Entity> = { cypher, params };
 
     // Add execute method if we have an entity manager
     if (this.em) {
       result.execute = async () => {
-        return this.em!.getConnection().execute<T[]>(cypher, params);
+        return this.em!.getConnection().execute<Entity[]>(cypher, params);
       };
     }
 
     return result;
+  }
+
+  /**
+   * Resolves a property path (e.g., 'name', 'p.name', 'node.price') to a Cypher.Property.
+   * Handles tracked variables, the return alias, and automatic joining of relationships.
+   */
+  private resolvePropertyPath(path: string): Cypher.Property {
+    if (this.meta && this.meta.properties[path as EntityKey<Entity>]) {
+      return this.node.property(path);
+    }
+
+    const [pref, propName] = path.split('.');
+    const variable = this.variables.get(pref);
+
+    if (variable instanceof Cypher.Node || variable instanceof Cypher.Variable) {
+      return (variable as Cypher.Node).property(propName);
+    }
+
+    // If it matches the return alias, it's a reference to the projected result
+    if (pref === this.returnAlias) {
+      return new Cypher.NamedVariable(pref).property(propName);
+    }
+
+    // Auto-joining: If prefix matches a relationship property of the root node, join it automatically
+    if (this.meta && this.meta.properties[pref as keyof EntityMetadata<Entity>['properties']]) {
+      const prop = this.meta.properties[pref as keyof EntityMetadata<Entity>['properties']];
+      if (prop.kind !== ReferenceKind.SCALAR) {
+        // Automatically join the relationship using the property name as the alias
+        this.join(pref, pref);
+        const joinedVariable = this.variables.get(pref);
+        if (joinedVariable) {
+          return (joinedVariable as any).property(propName);
+        }
+      }
+    }
+
+    // Fallback to treat the whole thing as a property of the main node
+    return this.node.property(path);
   }
 
   /**
@@ -936,7 +1217,7 @@ export class Neo4jQueryBuilder<T = any> {
    * const movies = await qb.match().where('title', 'The Matrix').execute();
    * ```
    */
-  async execute(): Promise<T[]> {
+  async execute(): Promise<Entity[]> {
     const { cypher, params } = this.build();
 
     if (!this.em) {
@@ -946,7 +1227,7 @@ export class Neo4jQueryBuilder<T = any> {
     }
 
     // Use the EntityManager's run method which properly converts Neo4j types
-    return (this.em as any).run(cypher, params) as Promise<T[]>;
+    return (this.em as Neo4jEntityManager).run(cypher, params) as Promise<Entity[]>;
   }
 
   /**
@@ -960,7 +1241,7 @@ export class Neo4jQueryBuilder<T = any> {
    * const movies = await qb.match().where('released', 1999).getMany();
    * ```
    */
-  async getMany(): Promise<T[]> {
+  async getMany(): Promise<Entity[]> {
     return this.execute();
   }
 
@@ -975,7 +1256,7 @@ export class Neo4jQueryBuilder<T = any> {
    * const movie = await qb.match().where('title', 'The Matrix').getOne();
    * ```
    */
-  async getOne(): Promise<T | null> {
+  async getOne(): Promise<Entity | null> {
     if (!this.em) {
       throw new Error(
         'Cannot execute query without an EntityManager. Use build() and execute manually.',
@@ -986,18 +1267,20 @@ export class Neo4jQueryBuilder<T = any> {
     this.limit(1);
 
     const { cypher, params } = this.build();
-    const result = (await (this.em as any).run(cypher, params)) as T[];
+    const result = (await (this.em as any).run(cypher, params)) as Entity[];
     return result.length > 0 ? result[0] : null;
   }
 
   /**
-   * Converts properties object to Cypher parameters.
+   * Helper to convert a property object to Cypher params.
    */
-  private convertPropertiesToParams(properties: Record<string, any>): Record<string, any> {
-    const result: Record<string, any> = {};
+  private convertPropertiesToParams(
+    properties: Record<string, unknown>,
+  ): Record<string, Cypher.Param> {
+    const params: Record<string, Cypher.Param> = {};
     for (const [key, value] of Object.entries(properties)) {
-      result[key] = new Cypher.Param(value);
+      params[key] = new Cypher.Param(value);
     }
-    return result;
+    return params;
   }
 }

@@ -4,8 +4,9 @@ import {
   type EntityMetadata,
   type FilterQuery,
   type QueryOrderMap,
+  isRaw,
 } from '@mikro-orm/core';
-import { Neo4jCypherBuilder } from './Neo4jCypherBuilder';
+import { Neo4jCypherBuilder } from './Neo4jCypherBuilder.js';
 
 /**
  * Shared utility class for building Cypher query primitives.
@@ -118,6 +119,12 @@ export class Neo4jCypherUtils {
         return;
       }
 
+      // Handle RawQueryFragment: { title: raw('UPPER(n.title)') }
+      if (isRaw(value)) {
+        clauses.push(new Cypher.Raw(() => `${key} = ${value.sql}`));
+        return;
+      }
+
       // Simple equality: { key: value }
       clauses.push(Cypher.eq(variable.property(key), new Cypher.Param(value)));
     });
@@ -135,12 +142,12 @@ export class Neo4jCypherUtils {
   static buildOrderClauses<T extends object>(
     variable: Cypher.Variable,
     orderBy?: QueryOrderMap<T> | QueryOrderMap<T>[],
-  ): [any, 'ASC' | 'DESC'][] {
+  ): [Cypher.Expr | Cypher.Property, 'ASC' | 'DESC'][] {
     if (!orderBy || (Array.isArray(orderBy) && orderBy.length === 0)) {
       return [];
     }
 
-    const parts: [any, 'ASC' | 'DESC'][] = [];
+    const parts: [Cypher.Expr | Cypher.Property, 'ASC' | 'DESC'][] = [];
     const arr = Array.isArray(orderBy) ? orderBy : [orderBy];
 
     for (const item of arr) {
@@ -165,10 +172,11 @@ export class Neo4jCypherUtils {
    * @param value - Any value that may contain Neo4j native types
    * @returns The converted JavaScript value
    */
-  static convertNeo4jValue(value: any): any {
+  static convertNeo4jValue(value: unknown): unknown {
     // Handle Neo4j Integer objects
     if (value && typeof value === 'object' && 'low' in value && 'high' in value) {
-      return value.toNumber ? value.toNumber() : Number(value.low);
+      const v = value as { low: number; high: number; toNumber?: () => number };
+      return v.toNumber ? v.toNumber() : Number(v.low);
     }
 
     // Handle arrays recursively
@@ -178,9 +186,10 @@ export class Neo4jCypherUtils {
 
     // Handle plain objects recursively
     if (value && typeof value === 'object' && value.constructor === Object) {
-      const converted: any = {};
-      for (const key in value) {
-        converted[key] = this.convertNeo4jValue(value[key]);
+      const converted: Record<string, unknown> = {};
+      const record = value as Record<string, unknown>;
+      for (const key in record) {
+        converted[key] = this.convertNeo4jValue(record[key]);
       }
       return converted;
     }
@@ -194,8 +203,8 @@ export class Neo4jCypherUtils {
    * @param record - Object whose values may contain Neo4j native types
    * @returns New object with all values converted to JavaScript types
    */
-  static convertNeo4jRecord(record: any): any {
-    const result: any = {};
+  static convertNeo4jRecord(record: Record<string, unknown>): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
     for (const key in record) {
       result[key] = this.convertNeo4jValue(record[key]);
     }
@@ -268,14 +277,15 @@ export class Neo4jCypherUtils {
    * @returns The clause with WHERE applied (if filters exist), or the original clause
    */
   static applyWhere<T extends object>(
-    clause: any,
+    clause: Cypher.Clause,
     variable: Cypher.Variable,
     where: FilterQuery<T>,
-  ): any {
+  ): Cypher.Clause {
     if (where && Object.keys(where).length > 0) {
       const whereClauses = this.buildWhereClauses(variable, where);
       if (whereClauses.length > 0) {
-        return clause.where(Cypher.and(...whereClauses));
+        // cast to any here because @neo4j/cypher-builder doesn't expose where() on base Clause
+        return (clause as any).where(Cypher.and(...whereClauses));
       }
     }
     return clause;

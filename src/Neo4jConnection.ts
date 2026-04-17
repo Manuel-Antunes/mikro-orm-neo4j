@@ -1,17 +1,18 @@
 import {
-  type QueryResult,
-  type Transaction,
+  type Configuration,
   Connection,
   type ConnectionConfig,
   type ConnectionOptions,
   type ConnectionType,
-  type Configuration,
+  type QueryResult,
+  type Transaction,
+  WrappedEntity,
 } from '@mikro-orm/core';
 import neo4j, {
   type Driver,
+  type Transaction as Neo4jTx,
   type Session,
   type SessionMode,
-  type Transaction as Neo4jTx,
 } from 'neo4j-driver';
 
 export interface Neo4jConnectionOptions extends ConnectionOptions {
@@ -36,14 +37,18 @@ export class Neo4jConnection extends Connection {
   }
 
   override async connect(): Promise<void> {
-    const opts = this.getConnectionOptions();
-    this.driver = neo4j.driver(
-      opts.url,
-      neo4j.auth.basic(opts.user, opts.password),
-      opts.driverOptions,
-    );
-    this.database = opts.database;
-    await this.driver.getServerInfo();
+    try {
+      const opts = this.getConnectionOptions();
+      this.driver = neo4j.driver(
+        opts.url,
+        neo4j.auth.basic(opts.user, opts.password),
+        opts.driverOptions,
+      );
+      this.database = opts.database;
+      await this.driver.getServerInfo();
+    } catch (e) {
+      this.handleException(e);
+    }
   }
 
   private async ensureConnected(): Promise<void> {
@@ -93,7 +98,7 @@ export class Neo4jConnection extends Connection {
     }
   }
 
-  getSession(type: ConnectionType = 'write'): Session {
+  protected getSession(type: ConnectionType = 'write'): Session {
     if (!this.driver) {
       throw new Error('Neo4j driver is not connected.');
     }
@@ -110,11 +115,7 @@ export class Neo4jConnection extends Connection {
    */
   async executeRaw(cypher: string, params: any = {}, ctx?: Transaction): Promise<any> {
     await this.ensureConnected();
-
-    const isWriteQuery = /(CREATE|MERGE|SET|DELETE|REMOVE)/i.test(cypher);
-    const session = ctx
-      ? (ctx as Neo4jTransactionContext)
-      : this.getSession(isWriteQuery ? 'write' : 'read');
+    const session = ctx ? (ctx as Neo4jTransactionContext) : this.getSession(this.type);
     const shouldCloseSession = !ctx;
 
     try {
@@ -139,6 +140,8 @@ export class Neo4jConnection extends Connection {
       }
 
       return await session.run(cypher, convertedParams);
+    } catch (e) {
+      this.handleException(e);
     } finally {
       if (shouldCloseSession && 'close' in session) {
         await (session as Session).close();
@@ -149,15 +152,15 @@ export class Neo4jConnection extends Connection {
   override async execute<T>(
     cypher: string,
     params: any = {},
-    method?: 'all' | 'get' | 'run',
+    _?: 'all' | 'get' | 'run',
     ctx?: Transaction,
   ): Promise<QueryResult<T> | any | any[]> {
     const result = await this.executeRaw(cypher, params, ctx);
     return {
       affectedRows: result.summary.counters.updates().length,
-      insertId: 0 as any,
+      insertId: 0,
       insertedIds: [],
-      rows: result.records.map((r: any) => r.toObject()),
+      rows: result.records.map((r: WrappedEntity<any>) => r.toObject()),
       row: result.records.length > 0 ? result.records[0].toObject() : undefined,
     } as unknown as QueryResult<T>;
   }
@@ -184,7 +187,7 @@ export class Neo4jConnection extends Connection {
       return result;
     } catch (e) {
       await tx.rollback().catch(() => undefined);
-      throw e;
+      this.handleException(e);
     } finally {
       await session.close();
     }
@@ -210,18 +213,28 @@ export class Neo4jConnection extends Connection {
   }
 
   override async commit(ctx: Neo4jTransactionContext): Promise<void> {
-    await ctx.commit();
-    // Close the session after commit
-    if (ctx.__mikro_session) {
-      await ctx.__mikro_session.close();
+    try {
+      await ctx.commit();
+    } catch (e) {
+      this.handleException(e);
+    } finally {
+      // Close the session after commit
+      if (ctx.__mikro_session) {
+        await ctx.__mikro_session.close();
+      }
     }
   }
 
   override async rollback(ctx: Neo4jTransactionContext): Promise<void> {
-    await ctx.rollback();
-    // Close the session after rollback
-    if (ctx.__mikro_session) {
-      await ctx.__mikro_session.close();
+    try {
+      await ctx.rollback();
+    } catch (e) {
+      this.handleException(e);
+    } finally {
+      // Close the session after rollback
+      if (ctx.__mikro_session) {
+        await ctx.__mikro_session.close();
+      }
     }
   }
 
@@ -239,7 +252,7 @@ export class Neo4jConnection extends Connection {
       return result;
     } catch (e) {
       await tx.rollback().catch(() => undefined);
-      throw e;
+      this.handleException(e);
     } finally {
       await session.close();
     }
@@ -273,5 +286,9 @@ export class Neo4jConnection extends Connection {
       (this.options as Neo4jConnectionOptions).clientUrl ??
       this.config.get('clientUrl', this.getDefaultClientUrl());
     return url ?? this.getDefaultClientUrl();
+  }
+
+  protected handleException(e: any): never {
+    throw this.platform.getExceptionConverter().convertException(e);
   }
 }

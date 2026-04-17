@@ -7,11 +7,12 @@ import {
   type PopulateOptions,
   type Dictionary,
 } from '@mikro-orm/core';
-import { Neo4jExceptionConverter } from './Neo4jExceptionConverter';
-import { Neo4jSchemaGenerator } from './Neo4jSchemaGenerator';
-import { Neo4jEntityRepository } from './Neo4jEntityRepository';
+import { Neo4jExceptionConverter } from './Neo4jExceptionConverter.js';
+import { Neo4jSchemaGenerator } from './Neo4jSchemaGenerator.js';
+import { Neo4jEntityRepository } from './Neo4jEntityRepository.js';
 
 export class Neo4jPlatform extends Platform {
+  readonly supportsUuid = true;
   protected override readonly exceptionConverter = new Neo4jExceptionConverter();
 
   override usesImplicitTransactions(): boolean {

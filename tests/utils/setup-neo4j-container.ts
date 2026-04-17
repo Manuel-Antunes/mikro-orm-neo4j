@@ -16,7 +16,7 @@ export async function setupNeo4jContainer(
     .withNetwork(_network)
     .withNetworkAliases('neo4j')
     .withExposedPorts(7687)
-    .withStartupTimeout(180_000)
+    .withStartupTimeout(300_000)
     .withEnvironment({
       NEO4J_AUTH: authString,
       NEO4J_server_memory_heap_max__size: '2G',

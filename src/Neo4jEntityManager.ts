@@ -1,5 +1,6 @@
 import {
   type AnyEntity,
+  ConnectionType,
   EntityManager,
   type EntityName,
   type EntityRepository,
@@ -7,10 +8,10 @@ import {
   type Ref,
   type TransactionOptions,
 } from '@mikro-orm/core';
-import type { Neo4jDriver } from './Neo4jDriver';
-import type { Neo4jEntityRepository } from './Neo4jEntityRepository';
-import { Neo4jQueryBuilder } from './Neo4jQueryBuilder';
-import { Neo4jCypherUtils } from './Neo4jCypherUtils';
+import type { Neo4jDriver } from './Neo4jDriver.js';
+import type { Neo4jEntityRepository } from './Neo4jEntityRepository.js';
+import { Neo4jQueryBuilder } from './Neo4jQueryBuilder.js';
+import { Neo4jCypherUtils } from './Neo4jCypherUtils.js';
 
 export class Neo4jEntityManager<
   Driver extends Neo4jDriver = Neo4jDriver,
@@ -92,11 +93,14 @@ export class Neo4jEntityManager<
    *   .execute();
    * ```
    */
-  createQueryBuilder<T = any>(entityName?: EntityName<T>): Neo4jQueryBuilder<T> {
-    return new Neo4jQueryBuilder<T>(entityName, this);
+  createQueryBuilder<Entity extends object, RootAlias extends string = string>(
+    entityName?: EntityName<Entity>,
+    alias?: RootAlias,
+  ) {
+    return new Neo4jQueryBuilder<Entity, RootAlias>(entityName, this, alias);
   }
 
-  override getConnection(type?: any): ReturnType<Driver['getConnection']> {
+  override getConnection(type?: ConnectionType | undefined): ReturnType<Driver['getConnection']> {
     return this.getDriver().getConnection(type) as ReturnType<Driver['getConnection']>;
   }
 }
