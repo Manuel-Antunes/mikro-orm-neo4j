@@ -318,7 +318,71 @@ The driver automatically maps Neo4j-specific error codes to standard MikroORM ex
 | `DeadlockException` | `Neo.TransientError.Transaction.DeadlockDetected` |
 | `ConnectionException` | `Neo.TransientError.Network.ConnectivityError` |
 
-## Advanced Usage
+### 8. Schema Generation & GraphQL Support
+
+The driver includes a `Neo4jSchemaGenerator` that can export your MikroORM metadata as a GraphQL SDL (Schema Definition Language) compatible with the `@neo4j/graphql` library.
+
+This is particularly powerful for:
+- 🤖 **AI-Ready Schemas**: AI agents and LLMs perform significantly better when provided with a detailed SDL including semantic descriptions.
+- ⚡ **Instant APIs**: Generate a standard GraphQL schema for Neo4j based on your ORM models.
+
+#### Generating SDL
+
+You can access the generator through the standard MikroORM schema API:
+
+```typescript
+const sdl = orm.schema.getGraphSdl();
+console.log(sdl);
+```
+
+#### Enrichment with `comment`
+
+Both the decorator and functional APIs support a `comment` property. These comments are automatically translated into GraphQL docstrings (triple-quoted strings) in the generated SDL.
+
+##### Decorator Approach
+
+```typescript
+@Entity({ comment: 'Represents a human user in the system.' })
+export class User {
+  @PrimaryKey()
+  id!: string;
+
+  @Property({ comment: 'The display name used in public profiles.' })
+  name!: string;
+}
+```
+
+##### Functional Approach
+
+```typescript
+export const ProductSchema = defineEntity({
+  name: 'Product',
+  comment: 'An item available for purchase.',
+  properties(p) {
+    return {
+      id: p.uuid().primary(),
+      price: p.number({ comment: 'Retail price in USD.' }),
+    };
+  },
+});
+```
+
+#### Resulting SDL Example
+
+```graphql
+"""
+An item available for purchase.
+"""
+type Product @node {
+  id: ID!
+  """
+  Retail price in USD.
+  """
+  price: Float!
+}
+```
+
+### 9. Advanced Usage
 
 ### Custom labels via `defineEntity`
 
@@ -347,6 +411,26 @@ const users = await em.run(
   { title: 'Graph Databases 101' }
 );
 ```
+
+## Troubleshooting
+
+### Node.js `globSync` SyntaxError
+
+If you encounter `SyntaxError: The requested module 'node:fs' does not provide an export named 'globSync'`, it means you are running a version of Node.js older than **22.0.0**. 
+
+**Solution**: Ensure your environment (including CI runners and Docker containers) is using Node.js **22+**.
+
+### Running Workflows with `act` on Apple Silicon
+
+When using [act](https://github.com/nektos/act) to test GitHub Actions locally on an Apple M-series (M1/M2/M3) chip, you may encounter an **exit code 137** (OOM or Architecture crash) during the `setup-node` step.
+
+**Solution**: Specify the container architecture explicitly to avoid emulation crashes:
+
+```bash
+act --container-architecture linux/amd64
+```
+
+Additionally, ensure your Docker Desktop has at least **4GB-6GB** of RAM allocated in **Settings > Resources**.
 
 ## License
 

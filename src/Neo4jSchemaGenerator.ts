@@ -9,7 +9,10 @@ import {
   type RefreshDatabaseOptions,
   type UpdateSchemaOptions,
 } from '@mikro-orm/core';
+import graphqlFormatter from './graphql/graphql.js';
+import { Neo4jSchemaCypherGenerator } from './graphql/Neo4jSchemaCypherGenerator.js';
 import type { Neo4jDriver } from './Neo4jDriver.js';
+import { Neo4jEntityManager } from './Neo4jEntityManager.js';
 
 export class Neo4jSchemaGenerator implements ISchemaGenerator {
   private readonly driver: Neo4jDriver;
@@ -104,5 +107,13 @@ export class Neo4jSchemaGenerator implements ISchemaGenerator {
 
   async clearDatabase(options: ClearDatabaseOptions = {}): Promise<void> {
     await this.clear(options);
+  }
+
+  private sdlGen = new Neo4jSchemaCypherGenerator();
+  getGraphSdl(readonly = false): string {
+    return graphqlFormatter(
+      this.sdlGen.convertToStructure(this.em as Neo4jEntityManager),
+      readonly,
+    );
   }
 }

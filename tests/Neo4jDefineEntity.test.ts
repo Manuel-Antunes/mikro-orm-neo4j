@@ -19,17 +19,17 @@ const DefineCategorySchema = defineEntity({
         .primary()
         .onCreate(() => crypto.randomUUID()),
       name: p.string(),
-      products: () => p.oneToMany(DefineProductSchema as any).mappedBy('category'),
+      products: () => p.oneToMany(DefineProductSchema).mappedBy('category'),
     };
   },
 });
 
-class DefineCategory extends (DefineCategorySchema.class as any) {
+class DefineCategory extends DefineCategorySchema.class {
   get normalizedName(): string {
-    return (this as any).name.trim().toLowerCase();
+    return this.name.trim().toLowerCase();
   }
 }
-DefineCategorySchema.setClass(DefineCategory as any);
+DefineCategorySchema.setClass(DefineCategory);
 
 // Product entity
 const DefineProductSchema = defineEntity({
@@ -45,16 +45,10 @@ const DefineProductSchema = defineEntity({
       price: p.integer().nullable(),
       // ManyToOne with custom relationship type
       category: () =>
-        neo4j(
-          p
-            .manyToOne(DefineCategorySchema as any)
-            .ref()
-            .nullable(),
-          {
-            type: 'BELONGS_TO',
-            direction: 'OUT',
-          },
-        ),
+        neo4j(p.manyToOne(DefineCategorySchema).ref().nullable(), {
+          type: 'BELONGS_TO',
+          direction: 'OUT',
+        }),
       // ManyToMany (owner side) with custom relationship type
       peers: () =>
         neo4j(
@@ -73,7 +67,7 @@ const DefineProductSchema = defineEntity({
           p
             .manyToMany(DefineTag)
             .owner()
-            .pivotEntity(() => DefineProductTagSchema as any),
+            .pivotEntity(() => DefineProductTagSchema),
           {
             type: 'TAGGED_WITH',
             direction: 'OUT',
@@ -83,12 +77,12 @@ const DefineProductSchema = defineEntity({
   },
 });
 
-class DefineProduct extends (DefineProductSchema.class as any) {
+class DefineProduct extends DefineProductSchema.class {
   get label(): string {
-    return `${(this as any).name}:${(this as any).price ?? 0}`;
+    return `${this.name}:${this.price ?? 0}`;
   }
 }
-DefineProductSchema.setClass(DefineProduct as any);
+DefineProductSchema.setClass(DefineProduct);
 
 // Tag entity
 const DefineTagSchema = defineEntity({
@@ -102,7 +96,7 @@ const DefineTagSchema = defineEntity({
         .onCreate(() => crypto.randomUUID()),
       name: p.string(),
       products: () =>
-        neo4j(p.manyToMany(DefineProductSchema as any).mappedBy('tags'), {
+        neo4j(p.manyToMany(DefineProductSchema).mappedBy('tags'), {
           type: 'TAGGED_WITH',
           direction: 'IN',
         }),
@@ -110,8 +104,8 @@ const DefineTagSchema = defineEntity({
   },
 });
 
-class DefineTag extends (DefineTagSchema.class as any) {}
-DefineTagSchema.setClass(DefineTag as any);
+class DefineTag extends DefineTagSchema.class {}
+DefineTagSchema.setClass(DefineTag);
 
 // Pivot entity — relationship properties for TAGGED_WITH
 const DefineProductTagSchema = defineEntity({
@@ -124,15 +118,15 @@ const DefineProductTagSchema = defineEntity({
         .uuid()
         .primary()
         .onCreate(() => crypto.randomUUID()),
-      product: () => p.manyToOne(DefineProductSchema as any).primary(),
-      tag: () => p.manyToOne(DefineTagSchema as any).primary(),
+      product: () => p.manyToOne(DefineProductSchema).primary(),
+      tag: () => p.manyToOne(DefineTagSchema).primary(),
       addedAt: p.integer(),
     };
   },
 });
 
-class DefineProductTag extends (DefineProductTagSchema.class as any) {}
-DefineProductTagSchema.setClass(DefineProductTag as any);
+class DefineProductTag extends DefineProductTagSchema.class {}
+DefineProductTagSchema.setClass(DefineProductTag);
 
 // Pivot entity — relationship properties for SIMILAR_TO
 const DefineSimilaritySchema = defineEntity({
@@ -146,14 +140,14 @@ const DefineSimilaritySchema = defineEntity({
         .primary()
         .onCreate(() => crypto.randomUUID()),
       score: p.integer(),
-      from: () => p.manyToOne(DefineProductSchema as any),
-      to: () => p.manyToOne(DefineProductSchema as any),
+      from: () => p.manyToOne(DefineProductSchema),
+      to: () => p.manyToOne(DefineProductSchema),
     };
   },
 });
 
-class DefineSimilarity extends (DefineSimilaritySchema.class as any) {}
-DefineSimilaritySchema.setClass(DefineSimilarity as any);
+class DefineSimilarity extends DefineSimilaritySchema.class {}
+DefineSimilaritySchema.setClass(DefineSimilarity);
 
 // Author + Book for a cleaner directed-relationship example
 const DefineAuthorSchema = defineEntity({
@@ -172,8 +166,8 @@ const DefineAuthorSchema = defineEntity({
   },
 });
 
-class DefineAuthor extends (DefineAuthorSchema.class as any) {}
-DefineAuthorSchema.setClass(DefineAuthor as any);
+class DefineAuthor extends DefineAuthorSchema.class {}
+DefineAuthorSchema.setClass(DefineAuthor);
 
 const DefineBookSchema = defineEntity({
   name: 'DefineBook',
@@ -187,22 +181,16 @@ const DefineBookSchema = defineEntity({
       title: p.string(),
       year: p.integer(),
       author: () =>
-        neo4j(
-          p
-            .manyToOne(DefineAuthorSchema as any)
-            .ref()
-            .nullable(),
-          {
-            type: 'WROTE',
-            direction: 'IN',
-          },
-        ),
+        neo4j(p.manyToOne(DefineAuthorSchema).ref().nullable(), {
+          type: 'WROTE',
+          direction: 'IN',
+        }),
     };
   },
 });
 
-class DefineBook extends (DefineBookSchema.class as any) {}
-DefineBookSchema.setClass(DefineBook as any);
+class DefineBook extends DefineBookSchema.class {}
+DefineBookSchema.setClass(DefineBook);
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -222,13 +210,13 @@ describe('Neo4j defineEntity strategy (v7)', () => {
     orm = await MikroORM.init({
       clientUrl: container.connectionUri,
       entities: [
-        DefineCategorySchema as any,
-        DefineProductSchema as any,
-        DefineTagSchema as any,
-        DefineProductTagSchema as any,
-        DefineAuthorSchema as any,
-        DefineBookSchema as any,
-        DefineSimilaritySchema as any,
+        DefineCategorySchema,
+        DefineProductSchema,
+        DefineTagSchema,
+        DefineProductTagSchema,
+        DefineAuthorSchema,
+        DefineBookSchema,
+        DefineSimilaritySchema,
       ],
       dbName: 'neo4j',
       user: auth.username,
@@ -252,19 +240,19 @@ describe('Neo4j defineEntity strategy (v7)', () => {
   // ─── Original tests ────────────────────────────────────────────────────────
 
   test('supports defineEntity class assignment and relation resolution', async () => {
-    const category = orm.em.create(DefineCategorySchema, { name: 'Books' } as any);
+    const category = orm.em.create(DefineCategorySchema, { name: 'Books' });
     const product = orm.em.create(DefineProductSchema, {
       name: 'Graph Databases 101',
       price: 42,
       category,
-    } as any);
+    });
 
     await orm.em.persist([category, product]).flush();
     orm.em.clear();
 
     const loaded = await orm.em.findOneOrFail(
       DefineProductSchema,
-      { id: (product as any).id },
+      { id: product.id },
       { populate: ['category'] },
     );
 
@@ -282,21 +270,21 @@ describe('Neo4j defineEntity strategy (v7)', () => {
 
     const results = await orm.em.find(DefineProductSchema, {
       $or: [{ name: 'Keyboard' }, { price: { $gt: 1000 } }],
-    } as any);
+    });
 
-    expect(results.map((p) => (p as any).name).sort()).toEqual(['Keyboard', 'Laptop']);
+    expect(results.map((p) => p.name).sort()).toEqual(['Keyboard', 'Laptop']);
   });
 
   // ─── ManyToOne with custom relationship type ───────────────────────────────
 
   describe('ManyToOne with custom relationship type', () => {
     test('persists and populates ManyToOne with BELONGS_TO relationship', async () => {
-      const category = orm.em.create(DefineCategorySchema, { name: 'Fiction' } as any);
+      const category = orm.em.create(DefineCategorySchema, { name: 'Fiction' });
       const product = orm.em.create(DefineProductSchema, {
         name: 'Dune',
         price: 15,
         category,
-      } as any);
+      });
 
       await orm.em.persist([category, product]).flush();
 

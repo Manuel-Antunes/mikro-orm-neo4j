@@ -17,3 +17,4 @@ export {
   defineNeo4jConfig as defineConfig,
 } from './Neo4jMikroORM.js';
 export * from '@mikro-orm/core';
+export { defineEntity } from './defineNeo4jEntity.js';

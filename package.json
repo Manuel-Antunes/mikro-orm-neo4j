@@ -1,6 +1,6 @@
 {
   "name": "mikro-orm-neo4j",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Neo4j driver for MikroORM (OGM-style graph support)",
   "author": "Manuel Antunes",
   "license": "MIT",
@@ -42,7 +42,10 @@
   },
   "dependencies": {
     "@neo4j/cypher-builder": "^2.12.0",
+    "camelcase": "^9.0.0",
+    "debug": "^4.4.3",
     "neo4j-driver": "^5.26.0",
+    "pluralize": "^8.0.0",
     "tslib": "^2.8.1"
   },
   "devDependencies": {
@@ -52,7 +55,9 @@
     "@mikro-orm/decorators": "^7.0.2",
     "@mikro-orm/reflection": "^7.0.2",
     "@swc/core": "^1.15.26",
+    "@types/debug": "^4.1.13",
     "@types/node": "^22.13.5",
+    "@types/pluralize": "^0.0.33",
     "@typescript-eslint/eslint-plugin": "^8.21.0",
     "@typescript-eslint/parser": "^8.21.0",
     "@vitest/coverage-v8": "^3.0.0",
@@ -72,7 +77,7 @@
     "@mikro-orm/core": "^7.0.2"
   },
   "engines": {
-    "node": ">=18.0.0",
+    "node": ">=22.0.0",
     "pnpm": ">=9.0.0"
   },
   "repository": {
