@@ -1,7 +1,7 @@
 # @mikro-orm/neo4j
 
 [![NPM Version](https://img.shields.io/npm/v/mikro-orm-neo4j.svg)](https://www.npmjs.com/package/mikro-orm-neo4j)
-[![License](https://img.shields.io/npm/l/mikro-orm-neo4j.svg)](https://github.com/mikro-orm/mikro-orm/blob/master](https://github.com/Manuel-Antunes/mikro-orm-neo4j/blob/main/LICENSE)
+[![License](https://img.shields.io/npm/l/mikro-orm-neo4j.svg)](https://github.com/Manuel-Antunes/mikro-orm-neo4j/blob/main/LICENSE)
 
 A native Neo4j driver for [MikroORM](https://mikro-orm.io/).
 
