@@ -27,11 +27,6 @@ export type Node = {
   isNode?: boolean;
 };
 
-export type Neo4jStruct = {
-  nodes: Record<string, Node>;
-  relationships: Record<string, Relationship>;
-};
-
 export type PropertyRecord = {
   propertyName: string;
   propertyTypes: string[];
@@ -42,6 +37,18 @@ export type NodeMap = {
   [key: string]: Node;
 };
 
+export type EnumDefinition = {
+  name: string;
+  values: string[];
+  description?: string;
+};
+
 export type RelationshipMap = {
   [key: string]: Relationship;
+};
+
+export type Neo4jStruct = {
+  nodes: Record<string, Node>;
+  relationships: Record<string, Relationship>;
+  enums: Record<string, EnumDefinition>;
 };

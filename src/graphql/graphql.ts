@@ -3,7 +3,7 @@
  * Neo4j Sweden AB [http://neo4j.com]
  */
 
-import type { Neo4jStruct, NodeMap, RelationshipMap } from './types';
+import type { EnumDefinition, Neo4jStruct, NodeMap, RelationshipMap } from './types';
 import nodeKey from './utils/node-key';
 import uniqueString from './utils/unique-string';
 import { GraphQLNode } from './GraphQLNode';
@@ -19,9 +19,12 @@ type GraphQLNodeMap = {
 };
 
 export default function graphqlFormatter(neo4jStruct: Neo4jStruct, readonly = false): string {
-  const { nodes, relationships } = neo4jStruct;
+  const { nodes, relationships, enums = {} } = neo4jStruct;
   const bareNodes = transformNodes(nodes);
   const withRelationships = hydrateWithRelationships(bareNodes, relationships);
+  const sortedEnumDefinitions = Object.values(enums)
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(renderEnumDefinition);
   const sorted = Object.keys(withRelationships).sort((a, b) => {
     return withRelationships[a].typeName > withRelationships[b].typeName ? 1 : -1;
   });
@@ -29,7 +32,22 @@ export default function graphqlFormatter(neo4jStruct: Neo4jStruct, readonly = fa
   if (readonly) {
     sortedWithRelationships.push('extend schema @mutation(operations: [])');
   }
-  return sortedWithRelationships.join('\n\n');
+  return [...sortedEnumDefinitions, ...sortedWithRelationships].join('\n\n');
+}
+
+function renderEnumDefinition(enumDef: EnumDefinition): string {
+  const lines: string[] = [];
+  if (enumDef.description) {
+    lines.push(`"""
+${enumDef.description}
+"""`);
+  }
+  lines.push(`enum ${enumDef.name} {`);
+  enumDef.values.forEach((value) => {
+    lines.push(`  ${value}`);
+  });
+  lines.push('}');
+  return lines.join('\n');
 }
 
 function transformNodes(nodes: NodeMap): GraphQLNodeMap {
@@ -61,7 +79,7 @@ function transformNodes(nodes: NodeMap): GraphQLNodeMap {
     const fields = createNodeFields(neo4jNode.properties, node.typeName);
     fields.forEach((f) => node.addField(f));
     const key = neo4jNode.labels.length > 0 ? neo4jNodeKey : nodeType;
-    (out as any)[key] = node;
+    (out as Record<string, unknown>)[key] = node;
   });
   return out;
 }

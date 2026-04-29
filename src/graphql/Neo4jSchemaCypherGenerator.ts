@@ -1,4 +1,9 @@
-import { ReferenceKind, type EntityMetadata, type EntityProperty } from '@mikro-orm/core';
+import {
+  EntityName,
+  ReferenceKind,
+  type EntityMetadata,
+  type EntityProperty,
+} from '@mikro-orm/core';
 import camelcase from 'camelcase';
 import pluralize from 'pluralize';
 import { Neo4jEntityManager } from '../Neo4jEntityManager.js';
@@ -9,6 +14,8 @@ import { CypherDirective } from './directives/Cypher.js';
 import { IdDirective } from './directives/Id.js';
 import { Directive, Neo4jStruct } from './types.js';
 import nodeKey from './utils/node-key.js';
+
+type EnumRegistry = Record<string, { name: string; values: string[]; description?: string }>;
 
 export class Neo4jSchemaCypherGenerator {
   public convertToStructure(em: Neo4jEntityManager): Neo4jStruct {
@@ -21,6 +28,7 @@ export class Neo4jSchemaCypherGenerator {
 
     const nodes: Record<string, Node> = {};
     const relationships: Record<string, Relationship> = {};
+    const enums: EnumRegistry = {};
 
     // First pass: identify relationship entities (pivot)
     for (const meta of metadataList) {
@@ -49,7 +57,7 @@ export class Neo4jSchemaCypherGenerator {
             prop.kind === ReferenceKind.SCALAR || String(prop.kind) === 'scalar' || prop.primary;
 
           if (isScalar && !prop.embedded) {
-            const gqlType = this.mapToGQLType(prop);
+            const gqlType = this.mapToGQLType(prop, enums);
             const directives: Directive[] = [];
             // In relationship properties, we don't usually use @id directive in standard Neo4j GraphQL
             // unless it's a node properties.
@@ -74,7 +82,7 @@ export class Neo4jSchemaCypherGenerator {
         const node = new Node(meta.className, [], meta.comment, false);
         for (const prop of meta.props) {
           if (prop.embedded) continue; // skip flattened
-          const gqlType = this.mapToGQLType(prop);
+          const gqlType = this.mapToGQLType(prop, enums);
           node.addProperty(new Property(prop.name, [gqlType], !prop.nullable, prop.comment));
         }
         nodes[meta.className] = node;
@@ -115,7 +123,7 @@ export class Neo4jSchemaCypherGenerator {
         const isEmbedded = prop.kind === ReferenceKind.EMBEDDED || String(prop.kind) === 'embedded';
 
         if (isScalar) {
-          const gqlType = this.mapToGQLType(prop);
+          const gqlType = this.mapToGQLType(prop, enums);
           const directives: Directive[] = [];
           if (prop.primary) {
             directives.push(new IdDirective());
@@ -133,7 +141,7 @@ export class Neo4jSchemaCypherGenerator {
           ].includes(prop.kind) ||
           ['m:1', '1:m', 'm:n'].includes(String(prop.kind))
         ) {
-          const targetMeta = metadataStorage.get(prop.type as any);
+          const targetMeta = metadataStorage.get(prop.type as unknown as EntityName);
           const relType =
             prop.relationship?.type ||
             (targetMeta?.relationship && typeof targetMeta.relationship === 'object'
@@ -150,7 +158,7 @@ export class Neo4jSchemaCypherGenerator {
               ? metadataStorage.get(
                   (typeof pivotEntity === 'string'
                     ? pivotEntity
-                    : (pivotEntity as { name: string }).name) as any,
+                    : (pivotEntity as { name: string }).name) as unknown as EntityName,
                 )
               : undefined;
             const relKey = pivotMeta?.className || relType;
@@ -191,11 +199,25 @@ export class Neo4jSchemaCypherGenerator {
       nodes['Query'] = queryNode;
     }
 
-    return { nodes, relationships };
+    return { nodes, relationships, enums };
   }
 
-  private mapToGQLType(prop: EntityProperty): string {
+  private mapToGQLType(prop: EntityProperty, enums: EnumRegistry): string {
     if (prop.primary) return 'ID';
+
+    if (prop.enum) {
+      const enumName = this.getEnumName(prop);
+      const values = this.resolveEnumValues(prop);
+      if (values.length > 0) {
+        enums[enumName] = {
+          name: enumName,
+          values,
+          description: prop.comment,
+        };
+      }
+      const enumType = enumName;
+      return prop.array ? `[${enumType}!]` : enumType;
+    }
 
     const type = (prop.type || '').toLowerCase();
     if (prop.array || type.endsWith('[]') || type === 'json') {
@@ -214,5 +236,41 @@ export class Neo4jSchemaCypherGenerator {
     if (type === 'datetime') return 'DateTime';
 
     return 'String';
+  }
+
+  private getEnumName(prop: EntityProperty): string {
+    if (typeof prop.nativeEnumName === 'string' && prop.nativeEnumName.length > 0) {
+      return prop.nativeEnumName;
+    }
+    if (typeof prop.type === 'string' && prop.type.length > 0) {
+      return prop.type;
+    }
+    return String(prop.name).replace(/[^a-zA-Z0-9_]/g, '_');
+  }
+
+  private resolveEnumValues(prop: EntityProperty): string[] {
+    if (!prop.items) {
+      return [];
+    }
+
+    const rawItems =
+      typeof prop.items === 'function' ? (prop.items as () => (string | number)[])() : prop.items;
+    const values: string[] = [];
+
+    if (Array.isArray(rawItems)) {
+      rawItems.forEach((item) => {
+        if (item != null) {
+          values.push(String(item));
+        }
+      });
+    } else if (typeof rawItems === 'object' && rawItems !== null) {
+      Object.values(rawItems).forEach((item) => {
+        if (item != null) {
+          values.push(String(item));
+        }
+      });
+    }
+
+    return Array.from(new Set(values)).filter(Boolean);
   }
 }

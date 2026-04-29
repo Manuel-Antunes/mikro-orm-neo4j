@@ -4,6 +4,11 @@ import { TsMorphMetadataProvider } from '@mikro-orm/reflection';
 import * as crypto from 'node:crypto';
 import { StartedNeo4jContainer } from './utils/setup-neo4j-container.js';
 
+enum ProductType {
+  PHYSICAL = 'PHYSICAL',
+  DIGITAL = 'DIGITAL',
+}
+
 // ---------------------------------------------------------------------------
 // Schemas & Classes
 // ---------------------------------------------------------------------------
@@ -13,7 +18,6 @@ const DefineCategorySchema = defineEntity({
   name: 'DefineCategory',
   properties(p) {
     return {
-      // @ts-expect-error: bug in @mikro-orm/core
       id: p
         .uuid()
         .primary()
@@ -36,7 +40,6 @@ const DefineProductSchema = defineEntity({
   name: 'DefineProduct',
   properties(p) {
     return {
-      // @ts-expect-error: bug in @mikro-orm/core
       id: p
         .uuid()
         .primary()
@@ -44,6 +47,7 @@ const DefineProductSchema = defineEntity({
       name: p.string(),
       price: p.integer().nullable(),
       // ManyToOne with custom relationship type
+      type: p.enum(() => ProductType).nativeEnumName('ProductType'),
       category: () =>
         neo4j(p.manyToOne(DefineCategorySchema).ref().nullable(), {
           type: 'BELONGS_TO',
@@ -89,7 +93,6 @@ const DefineTagSchema = defineEntity({
   name: 'DefineTag',
   properties(p) {
     return {
-      // @ts-expect-error: bug in @mikro-orm/core
       id: p
         .uuid()
         .primary()
@@ -113,7 +116,6 @@ const DefineProductTagSchema = defineEntity({
   relationship: { type: 'TAGGED_WITH' },
   properties(p) {
     return {
-      // @ts-expect-error: bug in @mikro-orm/core
       id: p
         .uuid()
         .primary()
@@ -134,7 +136,6 @@ const DefineSimilaritySchema = defineEntity({
   relationship: { type: 'SIMILAR_TO' },
   properties(p) {
     return {
-      // @ts-expect-error: bug in @mikro-orm/core
       id: p
         .uuid()
         .primary()
@@ -155,7 +156,6 @@ const DefineAuthorSchema = defineEntity({
   labels: ['Author', 'Person'],
   properties(p) {
     return {
-      // @ts-expect-error: bug in @mikro-orm/core
       id: p
         .uuid()
         .primary()
@@ -173,7 +173,6 @@ const DefineBookSchema = defineEntity({
   name: 'DefineBook',
   properties(p) {
     return {
-      // @ts-expect-error: bug in @mikro-orm/core
       id: p
         .uuid()
         .primary()
@@ -242,6 +241,7 @@ describe('Neo4j defineEntity strategy (v7)', () => {
   test('supports defineEntity class assignment and relation resolution', async () => {
     const category = orm.em.create(DefineCategorySchema, { name: 'Books' });
     const product = orm.em.create(DefineProductSchema, {
+      type: ProductType.PHYSICAL,
       name: 'Graph Databases 101',
       price: 42,
       category,
@@ -256,15 +256,27 @@ describe('Neo4j defineEntity strategy (v7)', () => {
       { populate: ['category'] },
     );
 
-    expect((loaded as any).name).toBe('Graph Databases 101');
-    expect((loaded as any).category?.$.name).toBe('Books');
-    expect(((loaded as any).category?.$ as DefineCategory).normalizedName).toBe('books');
+    expect(loaded.name).toBe('Graph Databases 101');
+    expect(loaded.category?.$.name).toBe('Books');
+    expect((loaded.category?.$ as DefineCategory).normalizedName).toBe('books');
   });
 
   test('supports $or filters with defineEntity models', async () => {
-    const expensive = orm.em.create(DefineProductSchema, { name: 'Laptop', price: 3000 } as any);
-    const cheap = orm.em.create(DefineProductSchema, { name: 'Mouse', price: 30 } as any);
-    const named = orm.em.create(DefineProductSchema, { name: 'Keyboard', price: 90 } as any);
+    const expensive = orm.em.create(DefineProductSchema, {
+      name: 'Laptop',
+      price: 3000,
+      type: ProductType.PHYSICAL,
+    });
+    const cheap = orm.em.create(DefineProductSchema, {
+      name: 'Mouse',
+      price: 30,
+      type: ProductType.PHYSICAL,
+    });
+    const named = orm.em.create(DefineProductSchema, {
+      name: 'Keyboard',
+      price: 90,
+      type: ProductType.PHYSICAL,
+    });
 
     await orm.em.persist([expensive, cheap, named]).flush();
 
@@ -281,6 +293,7 @@ describe('Neo4j defineEntity strategy (v7)', () => {
     test('persists and populates ManyToOne with BELONGS_TO relationship', async () => {
       const category = orm.em.create(DefineCategorySchema, { name: 'Fiction' });
       const product = orm.em.create(DefineProductSchema, {
+        type: ProductType.PHYSICAL,
         name: 'Dune',
         price: 15,
         category,
@@ -293,7 +306,7 @@ describe('Neo4j defineEntity strategy (v7)', () => {
         `MATCH (p:define_product)-[r]->(c:define_category)
          WHERE p.id = $id
          RETURN type(r) as relType`,
-        { id: (product as any).id },
+        { id: product.id },
       );
 
       expect(raw).toHaveLength(1);
@@ -304,38 +317,40 @@ describe('Neo4j defineEntity strategy (v7)', () => {
       // Verify ORM-level population
       const loaded = await orm.em.findOneOrFail(
         DefineProductSchema,
-        { id: (product as any).id },
+        { id: product.id },
         { populate: ['category'] },
       );
-      expect((loaded as any).category?.$.name).toBe('Fiction');
+      expect(loaded.category?.$.name).toBe('Fiction');
     });
 
     test('populates OneToMany inverse via custom relationship', async () => {
-      const category = orm.em.create(DefineCategorySchema, { name: 'Science' } as any);
+      const category = orm.em.create(DefineCategorySchema, { name: 'Science' });
       const p1 = orm.em.create(DefineProductSchema, {
         name: 'Physics 101',
         price: 20,
         category,
-      } as any);
+        type: ProductType.PHYSICAL,
+      });
       const p2 = orm.em.create(DefineProductSchema, {
         name: 'Chemistry',
         price: 18,
         category,
-      } as any);
+        type: ProductType.PHYSICAL,
+      });
 
       await orm.em.persist([category, p1, p2]).flush();
       orm.em.clear();
 
       const loadedCategory = await orm.em.findOneOrFail(
         DefineCategorySchema,
-        { id: (category as any).id },
+        { id: category.id },
         { populate: ['products'] },
       );
 
-      expect((loadedCategory as any).products.length).toBe(2);
-      const names = (loadedCategory as any).products
+      expect(loadedCategory.products.length).toBe(2);
+      const names = loadedCategory.products
         .getItems()
-        .map((p: any) => p.name)
+        .map((p) => p.name)
         .sort();
       expect(names).toEqual(['Chemistry', 'Physics 101']);
     });
@@ -345,10 +360,22 @@ describe('Neo4j defineEntity strategy (v7)', () => {
 
   describe('ManyToMany with custom relationship type and direction', () => {
     test('persists ManyToMany with SIMILAR_TO relationship type', async () => {
-      const a = orm.em.create(DefineProductSchema, { name: 'Product A', price: 10 } as any);
-      const b = orm.em.create(DefineProductSchema, { name: 'Product B', price: 20 } as any);
-      const c = orm.em.create(DefineProductSchema, { name: 'Product C', price: 30 } as any);
-      (a as any).peers.add(b, c);
+      const a = orm.em.create(DefineProductSchema, {
+        name: 'Product A',
+        price: 10,
+        type: ProductType.PHYSICAL,
+      });
+      const b = orm.em.create(DefineProductSchema, {
+        name: 'Product B',
+        price: 20,
+        type: ProductType.PHYSICAL,
+      });
+      const c = orm.em.create(DefineProductSchema, {
+        name: 'Product C',
+        price: 30,
+        type: ProductType.PHYSICAL,
+      });
+      a.peers.add(b as any, c);
 
       await orm.em.persistAndFlush([a, b, c]);
 
@@ -358,7 +385,7 @@ describe('Neo4j defineEntity strategy (v7)', () => {
          WHERE a.id = $id
          RETURN type(r) as relType, b.name as targetName
          ORDER BY b.name`,
-        { id: (a as any).id },
+        { id: a.id },
       );
 
       expect(raw).toHaveLength(2);
@@ -368,20 +395,32 @@ describe('Neo4j defineEntity strategy (v7)', () => {
     });
 
     test('populates ManyToMany collection via ORM', async () => {
-      const a = orm.em.create(DefineProductSchema, { name: 'Anchor', price: 5 } as any);
-      const x = orm.em.create(DefineProductSchema, { name: 'X', price: 5 } as any);
-      const y = orm.em.create(DefineProductSchema, { name: 'Y', price: 5 } as any);
-      (a as any).peers.add(x, y);
+      const a = orm.em.create(DefineProductSchema, {
+        name: 'Anchor',
+        price: 5,
+        type: ProductType.PHYSICAL,
+      });
+      const x = orm.em.create(DefineProductSchema, {
+        name: 'X',
+        price: 5,
+        type: ProductType.PHYSICAL,
+      });
+      const y = orm.em.create(DefineProductSchema, {
+        name: 'Y',
+        price: 5,
+        type: ProductType.PHYSICAL,
+      });
+      a.peers.add(x as any, y);
 
       await orm.em.persistAndFlush([a, x, y]);
       orm.em.clear();
 
       const loaded = await orm.em.findOneOrFail(
         DefineProductSchema,
-        { id: (a as any).id },
+        { id: a.id },
         { populate: ['peers'] },
       );
-      expect((loaded as any).peers.length).toBe(2);
+      expect(loaded.peers.length).toBe(2);
     });
   });
 
@@ -392,13 +431,14 @@ describe('Neo4j defineEntity strategy (v7)', () => {
       const product = orm.em.create(DefineProductSchema, {
         name: 'Smart Speaker',
         price: 99,
-      } as any);
-      const tag = orm.em.create(DefineTagSchema, { name: 'iot' } as any);
+        type: ProductType.PHYSICAL,
+      });
+      const tag = orm.em.create(DefineTagSchema, { name: 'iot' });
       const pivot = orm.em.create(DefineProductTagSchema, {
         product,
         tag,
         addedAt: 1700000000,
-      } as any);
+      });
 
       await orm.em.persistAndFlush([product, tag, pivot]);
 
@@ -407,7 +447,7 @@ describe('Neo4j defineEntity strategy (v7)', () => {
         `MATCH (p:define_product)-[r:TAGGED_WITH]->(t:define_tag)
          WHERE p.id = $id
          RETURN type(r) as relType, r.addedAt as addedAt`,
-        { id: (product as any).id },
+        { id: product.id },
       );
 
       expect(raw).toHaveLength(1);
@@ -416,20 +456,24 @@ describe('Neo4j defineEntity strategy (v7)', () => {
     });
 
     test('queries relationship properties via raw Cypher', async () => {
-      const product = orm.em.create(DefineProductSchema, { name: 'Headphones', price: 250 } as any);
-      const tagA = orm.em.create(DefineTagSchema, { name: 'audio' } as any);
-      const tagB = orm.em.create(DefineTagSchema, { name: 'wireless' } as any);
+      const product = orm.em.create(DefineProductSchema, {
+        name: 'Headphones',
+        price: 250,
+        type: ProductType.PHYSICAL,
+      });
+      const tagA = orm.em.create(DefineTagSchema, { name: 'audio' });
+      const tagB = orm.em.create(DefineTagSchema, { name: 'wireless' });
 
       const pivotA = orm.em.create(DefineProductTagSchema, {
         product,
         tag: tagA,
         addedAt: 1000,
-      } as any);
+      });
       const pivotB = orm.em.create(DefineProductTagSchema, {
         product,
         tag: tagB,
         addedAt: 2000,
-      } as any);
+      });
 
       await orm.em.persistAndFlush([product, tagA, tagB, pivotA, pivotB]);
       orm.em.clear();
@@ -440,7 +484,7 @@ describe('Neo4j defineEntity strategy (v7)', () => {
          WHERE p.id = $id
          RETURN r.addedAt as addedAt, t.name as tagName
          ORDER BY r.addedAt`,
-        { id: (product as any).id },
+        { id: product.id },
       );
       expect(rels).toHaveLength(2);
       expect(rels.map((r) => Number(r.addedAt))).toEqual([1000, 2000]);
@@ -451,7 +495,7 @@ describe('Neo4j defineEntity strategy (v7)', () => {
 
   describe('Custom entity labels via defineNeo4jEntity', () => {
     test('creates nodes with correct collection label', async () => {
-      const author = orm.em.create(DefineAuthorSchema, { name: 'Frank Herbert' } as any);
+      const author = orm.em.create(DefineAuthorSchema, { name: 'Frank Herbert' });
       await orm.em.persistAndFlush(author);
 
       // Node should be labelled 'define_author' (the collection name — snake_case of DefineAuthor)
@@ -468,12 +512,12 @@ describe('Neo4j defineEntity strategy (v7)', () => {
 
   describe('Directed relationships: Author WROTE Book', () => {
     test('persists directed WROTE relationship from author to book', async () => {
-      const author = orm.em.create(DefineAuthorSchema, { name: 'Isaac Asimov' } as any);
+      const author = orm.em.create(DefineAuthorSchema, { name: 'Isaac Asimov' });
       const book = orm.em.create(DefineBookSchema, {
         title: 'Foundation',
         year: 1951,
         author,
-      } as any);
+      });
 
       await orm.em.persistAndFlush([author, book]);
 
@@ -482,7 +526,7 @@ describe('Neo4j defineEntity strategy (v7)', () => {
         `MATCH (a:define_author)-[r]->(b:define_book)
          WHERE a.id = $id
          RETURN type(r) as relType`,
-        { id: (author as any).id },
+        { id: author.id },
       );
 
       expect(raw).toHaveLength(1);

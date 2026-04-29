@@ -1,7 +1,7 @@
 import '@mikro-orm/core';
 
 declare module '@mikro-orm/core' {
-  export interface PropertyOptions<Owner, Target> {
+  export interface PropertyOptions<Owner> {
     relationship?: {
       type?: string;
       direction?: 'IN' | 'OUT';
