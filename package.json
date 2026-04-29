@@ -1,6 +1,6 @@
 {
   "name": "mikro-orm-neo4j",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Neo4j driver for MikroORM (OGM-style graph support)",
   "author": "Manuel Antunes",
   "license": "MIT",
