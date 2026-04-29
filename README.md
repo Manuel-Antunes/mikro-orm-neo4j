@@ -108,12 +108,12 @@ export const MovieSchema = defineEntity({
 });
 
 // To add logic or methods, use setClass
-export class Movie extends (MovieSchema.class as any) {
+export class Movie extends MovieSchema.class {
   get isNew(): boolean {
     return this.released > 2020;
   }
 }
-MovieSchema.setClass(Movie as any);
+MovieSchema.setClass(Movie);
 ```
 
 #### Setting up TypeScript Typings
