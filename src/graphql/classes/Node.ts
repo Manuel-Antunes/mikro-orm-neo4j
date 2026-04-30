@@ -13,12 +13,21 @@ export default class Node {
   relationships: Relationship[] = [];
   description?: string;
   isNode?: boolean;
+  kind: 'type' | 'interface';
+  implements: string[] = [];
 
-  constructor(typeId: string, labels: string[], description?: string, isNode?: boolean) {
+  constructor(
+    typeId: string,
+    labels: string[],
+    description?: string,
+    isNode?: boolean,
+    kind: 'type' | 'interface' = 'type',
+  ) {
     this.typeId = typeId;
     this.labels = labels;
     this.description = description;
     this.isNode = isNode;
+    this.kind = kind;
   }
 
   addProperty(property: Property): void {
@@ -33,5 +42,11 @@ export default class Node {
       return;
     }
     this.relationships.push(relationship);
+  }
+
+  addImplement(interfaceName: string): void {
+    if (!this.implements.includes(interfaceName)) {
+      this.implements.push(interfaceName);
+    }
   }
 }

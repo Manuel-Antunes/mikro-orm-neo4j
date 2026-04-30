@@ -65,15 +65,22 @@ function transformNodes(nodes: NodeMap): GraphQLNodeMap {
 
     const uniqueTypeName = uniqueString(typeName, takenTypeNames);
     takenTypeNames.push(uniqueTypeName);
-    const node = new GraphQLNode('type', uniqueTypeName, neo4jNode.description);
+    const node = new GraphQLNode(
+      neo4jNode.kind === 'interface' ? 'interface' : 'type',
+      uniqueTypeName,
+      neo4jNode.description,
+    );
 
-    if (neo4jNode.isNode) {
+    if (neo4jNode.kind !== 'interface' && neo4jNode.isNode) {
       const nodeDirective = new NodeDirective();
       // Omit labels if there is only one and it matches the type name
       if (neo4jNode.labels.length > 1 || mainLabel.toLowerCase() !== uniqueTypeName.toLowerCase()) {
         nodeDirective.addLabels(neo4jNode.labels);
       }
       node.addDirective(nodeDirective);
+    }
+    if (neo4jNode.implements?.length) {
+      neo4jNode.implements.forEach((iface) => node.addImplement(iface));
     }
 
     const fields = createNodeFields(neo4jNode.properties, node.typeName);

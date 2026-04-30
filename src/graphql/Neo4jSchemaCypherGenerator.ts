@@ -11,11 +11,16 @@ import Node from './classes/Node.js';
 import Property from './classes/Property.js';
 import Relationship from './classes/Relationship.js';
 import { CypherDirective } from './directives/Cypher.js';
+import { DeclareRelationshipDirective } from './directives/DeclareRelationship.js';
 import { IdDirective } from './directives/Id.js';
 import { Directive, Neo4jStruct } from './types.js';
 import nodeKey from './utils/node-key.js';
+import generateGraphQLSafeName from './utils/generate-graphql-safe-name.js';
 
 type EnumRegistry = Record<string, { name: string; values: string[]; description?: string }>;
+
+const isInterfaceInheritance = (meta: EntityMetadata): boolean =>
+  (meta as any).inheritance === 'interface' || (meta as any).inheritanceType === 'interface';
 
 export class Neo4jSchemaCypherGenerator {
   public convertToStructure(em: Neo4jEntityManager): Neo4jStruct {
@@ -69,11 +74,67 @@ export class Neo4jSchemaCypherGenerator {
       }
     }
 
-    // Second pass: identify node entities, embeddables and virtual entities
+    // Second pass: identify interface entities, node entities, embeddables and virtual entities
+    const interfaceMetadata = metadataList.filter(isInterfaceInheritance);
+    for (const interfaceMeta of interfaceMetadata) {
+      const interfaceNode = new Node(
+        interfaceMeta.className,
+        [],
+        interfaceMeta.comment,
+        false,
+        'interface',
+      );
+
+      for (const prop of interfaceMeta.props) {
+        if (prop.embedded) continue;
+
+        const isScalar =
+          prop.kind === ReferenceKind.SCALAR || String(prop.kind) === 'scalar' || prop.primary;
+        const isEmbedded = prop.kind === ReferenceKind.EMBEDDED || String(prop.kind) === 'embedded';
+        const isRelationship =
+          [
+            ReferenceKind.MANY_TO_ONE,
+            ReferenceKind.ONE_TO_MANY,
+            ReferenceKind.MANY_TO_MANY,
+          ].includes(prop.kind) || ['m:1', '1:m', 'm:n', '1:1'].includes(String(prop.kind));
+
+        if (isScalar) {
+          const gqlType = this.mapToGQLType(prop, enums);
+          const directives: Directive[] = [];
+          if (prop.primary) {
+            directives.push(new IdDirective());
+          }
+          interfaceNode.addProperty(
+            new Property(prop.name, [gqlType], !prop.nullable, prop.comment, directives),
+          );
+        } else if (isEmbedded) {
+          interfaceNode.addProperty(
+            new Property(prop.name, [prop.type], !prop.nullable, prop.comment),
+          );
+        } else if (isRelationship) {
+          const targetTypeName = this.getRelationshipTargetTypeName(prop, metadataStorage);
+          const fieldType = this.getRelationshipFieldType(
+            prop.kind,
+            targetTypeName,
+            !prop.nullable,
+          );
+          interfaceNode.addProperty(
+            new Property(prop.name, [fieldType], !prop.nullable, prop.comment, [
+              new DeclareRelationshipDirective(),
+            ]),
+          );
+        }
+      }
+
+      nodes[interfaceMeta.className] = interfaceNode;
+    }
+
     const queryNode = new Node('Query', ['Query'], undefined, false);
     for (const meta of metadataList) {
-      // Skip pivot entities (already handled)
       if (meta.relationship && typeof meta.relationship === 'object' && meta.relationship.type) {
+        continue;
+      }
+      if (isInterfaceInheritance(meta)) {
         continue;
       }
 
@@ -112,7 +173,11 @@ export class Neo4jSchemaCypherGenerator {
       // Embeddables & Regular Node entities
       const labels = meta.labels || [meta.collection];
       const isEmbeddable = !!meta.embeddable;
-      const node = new Node(meta.className, labels, meta.comment, !isEmbeddable);
+      const node = new Node(meta.className, labels, meta.comment, !isEmbeddable, 'type');
+      const interfaceRoot = this.getInterfaceRoot(meta, metadataStorage);
+      if (interfaceRoot) {
+        node.addImplement(interfaceRoot.className);
+      }
 
       for (const prop of meta.props) {
         if (prop.embedded) continue; // Skip flattened embedded properties
@@ -179,10 +244,6 @@ export class Neo4jSchemaCypherGenerator {
             // In MikroORM, ManyToMany always has an owner side.
             // OneToMany is always inverse of ManyToOne.
             if (prop.kind === ReferenceKind.ONE_TO_MANY || String(prop.kind) === '1:m') {
-              // Skip one-to-many here, it will be handled by the many-to-one side or explicitly
-              // if there is no other side (though there usually is for relationships).
-              // Actually, for Neo4j GraphQL we want the field on both types.
-              // But addPath is shared across the relationship type.
               relationships[relKey].addPath(from, to, prop.name, otherSide);
             } else if (direction === 'OUT') {
               relationships[relKey].addPath(from, to, prop.name, otherSide);
@@ -200,6 +261,53 @@ export class Neo4jSchemaCypherGenerator {
     }
 
     return { nodes, relationships, enums };
+  }
+
+  private getInterfaceRoot(meta: EntityMetadata, metadataStorage: any): EntityMetadata | undefined {
+    if (!meta.extends) {
+      return undefined;
+    }
+
+    const parent = metadataStorage.get(meta.extends as EntityName);
+    if (!parent) {
+      return undefined;
+    }
+
+    if (isInterfaceInheritance(parent)) {
+      return parent;
+    }
+
+    return this.getInterfaceRoot(parent, metadataStorage);
+  }
+
+  private getRelationshipTargetTypeName(prop: EntityProperty, metadataStorage: any): string {
+    const targetMeta = metadataStorage.get(prop.type as unknown as EntityName);
+    const rawTargetName =
+      targetMeta?.className ||
+      (typeof prop.type === 'string'
+        ? prop.type
+        : prop.type && typeof (prop.type as any).name === 'string'
+          ? (prop.type as any).name
+          : String(prop.type));
+    return generateGraphQLSafeName(rawTargetName);
+  }
+
+  private getRelationshipFieldType(
+    kind: ReferenceKind | string,
+    targetType: string,
+    mandatory: boolean,
+  ): string {
+    const isSingular =
+      kind === ReferenceKind.MANY_TO_ONE ||
+      kind === ReferenceKind.ONE_TO_ONE ||
+      String(kind) === 'm:1' ||
+      String(kind) === '1:1';
+
+    if (isSingular) {
+      return `${targetType}${mandatory ? '!' : ''}`;
+    }
+
+    return `[${targetType}!]${mandatory ? '!' : ''}`;
   }
 
   private mapToGQLType(prop: EntityProperty, enums: EnumRegistry): string {

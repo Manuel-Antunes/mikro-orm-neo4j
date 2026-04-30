@@ -13,6 +13,7 @@ export class GraphQLNode {
   typeName: string;
   fields: NodeField[] = [];
   directives: Directive[] = [];
+  implements: string[] = [];
   description?: string;
 
   constructor(type: NodeType, typeName: string, description?: string) {
@@ -29,6 +30,12 @@ export class GraphQLNode {
     this.fields.push(field);
   }
 
+  addImplement(interfaceName: string) {
+    if (!this.implements.includes(interfaceName)) {
+      this.implements.push(interfaceName);
+    }
+  }
+
   toString() {
     const parts: (string | string[])[] = [];
     let innerParts: string[] = [];
@@ -39,6 +46,9 @@ export class GraphQLNode {
     }
 
     typeRow.push(this.type, this.typeName);
+    if (this.implements.length) {
+      typeRow.push(`implements ${this.implements.join(' & ')}`);
+    }
     if (this.directives.length) {
       typeRow.push(this.directives.map((d) => d.toString()).join(' '));
     }

@@ -116,6 +116,73 @@ export class Movie extends MovieSchema.class {
 MovieSchema.setClass(Movie);
 ```
 
+### Interface inheritance and relationships
+
+You can define a reusable interface entity that captures common fields and declared relationship fields, and then implement it in concrete Neo4j node entities.
+
+```typescript
+const ProductionSchema = defineEntity({
+  name: 'Production',
+  abstract: true,
+  inheritance: 'interface',
+  properties(p) {
+    return {
+      title: p.string(),
+      actors: () => p.manyToMany(PersonSchema),
+    };
+  },
+});
+
+const MovieSchema = defineEntity({
+  name: 'Movie',
+  extends: ProductionSchema,
+  labels: ['Movie'],
+  properties(p) {
+    return {
+      released: p.integer(),
+      actors: () => neo4j(
+        p.manyToMany(PersonSchema).owner().pivotEntity(() => ActedInSchema),
+        { type: 'ACTED_IN', direction: 'IN' },
+      ),
+    };
+  },
+});
+
+const SeriesSchema = defineEntity({
+  name: 'Series',
+  extends: ProductionSchema,
+  labels: ['Series'],
+  properties(p) {
+    return {
+      episodes: p.integer(),
+      actors: () => neo4j(
+        p.manyToMany(PersonSchema).owner().pivotEntity(() => ActedInSeriesSchema),
+        { type: 'ACTED_IN', direction: 'IN' },
+      ),
+    };
+  },
+});
+```
+
+This produces GraphQL SDL where `Production` is emitted as an interface with the declared relationship:
+
+```graphql
+interface Production {
+  title: String!
+  actors: [Person!]! @declareRelationship
+}
+
+type Movie implements Production @node {
+  released: Int!
+  actors: [Person!]! @relationship(type: "ACTED_IN", direction: IN, properties: "ActedIn")
+}
+
+type Series implements Production @node {
+  episodes: Int!
+  actors: [Person!]! @relationship(type: "ACTED_IN", direction: IN, properties: "ActedInSeries")
+}
+```
+
 #### Setting up TypeScript Typings
 
 Because `mikro-orm-neo4j` uses global declaration merging to augment `@mikro-orm/core`, you get autocomplete natively without requiring any `as any` casts! To ensure your TypeScript compiler (`tsc`) correctly registers these definitions in your project, simply add `@mikro-orm/neo4j/types` to your `tsconfig.json` compiler options, or add a triple-slash reference in your `global.d.ts`:

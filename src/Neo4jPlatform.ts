@@ -90,6 +90,14 @@ export class Neo4jPlatform extends Platform {
     return data;
   }
 
+  override usesBatchInserts(): boolean {
+    return false;
+  }
+
+  override usesBatchUpdates(): boolean {
+    return false;
+  }
+
   override convertsJsonAutomatically(): boolean {
     return true;
   }

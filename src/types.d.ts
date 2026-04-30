@@ -9,7 +9,10 @@ declare module '@mikro-orm/core' {
     };
   }
 
-  export interface EntityMetadata {
+  export interface EntityMetadata<
+    Entity = any,
+    Class extends EntityCtor<Entity> = EntityCtor<Entity>,
+  > {
     labels?: string[];
     relationship?: boolean | { type?: string; direction?: 'IN' | 'OUT' };
   }
@@ -42,8 +45,8 @@ declare module '@mikro-orm/core' {
     discriminatorMap?: Dictionary<string>;
     /** For {@doclink inheritance-mapping#single-table-inheritance | Single Table Inheritance}. */
     discriminatorValue?: number | string;
-    /** Set inheritance strategy: 'tpt' for {@doclink inheritance-mapping#table-per-type-inheritance-tpt | Table-Per-Type} inheritance. When set on the root entity, each entity in the hierarchy gets its own table with a FK from child PK to parent PK. */
-    inheritance?: 'tpt';
+    /** Set inheritance strategy: 'tpt' for {@doclink inheritance-mapping#table-per-type-inheritance-tpt | Table-Per-Type} inheritance, or 'interface' for GraphQL interface-backed entity declarations. */
+    inheritance?: 'tpt' | 'interface' | 'sti';
     /**	Enforce use of constructor when creating managed entity instances. */
     forceConstructor?: boolean;
     /** Specify constructor parameters to be used in `em.create` or when `forceConstructor` is enabled. Those should be names of declared entity properties in the same order as your constructor uses them. The ORM tries to infer those automatically, use this option in case the inference fails. */

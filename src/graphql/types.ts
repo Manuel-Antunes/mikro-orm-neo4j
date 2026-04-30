@@ -25,6 +25,8 @@ export type Node = {
   relationships: Relationship[];
   description?: string;
   isNode?: boolean;
+  kind?: 'type' | 'interface';
+  implements?: string[];
 };
 
 export type PropertyRecord = {

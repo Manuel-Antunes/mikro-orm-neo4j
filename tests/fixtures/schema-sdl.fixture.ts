@@ -198,6 +198,26 @@ type Movie @node {
 }
 
 """
+A feature-length movie production.
+"""
+type MovieProduction implements Production @node(labels: ["Movie", "Production"]) {
+  """
+  The internal unique identifier for a production.
+  """
+  id: ID! @id
+
+  """
+  The title of the production.
+  """
+  title: String!
+
+  """
+  The release year of the movie.
+  """
+  released: Int!
+}
+
+"""
 Represents a human entity in a social or professional graph.
 """
 type Person @node {
@@ -276,6 +296,21 @@ type ProductWithCategory {
   price: Int
 }
 
+"""
+Production interface for movies and series.
+"""
+interface Production {
+  """
+  The internal unique identifier for a production.
+  """
+  id: ID! @id
+
+  """
+  The title of the production.
+  """
+  title: String!
+}
+
 type Query {
   """
   A virtual entity using QueryBuilder to return flattened product/category data.
@@ -315,6 +350,26 @@ type Series @node {
   episodes: Int!
 
   actors: [Actor!]! @relationship(type: "ACTED_IN", direction: IN, properties: "ActedInSeries")
+}
+
+"""
+A television series production.
+"""
+type SeriesProduction implements Production @node(labels: ["Production", "Series"]) {
+  """
+  The internal unique identifier for a production.
+  """
+  id: ID! @id
+
+  """
+  The title of the production.
+  """
+  title: String!
+
+  """
+  The total number of episodes in the series.
+  """
+  episodes: Int!
 }
 
 """
