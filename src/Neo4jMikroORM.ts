@@ -14,7 +14,7 @@ import type { Neo4jEntityManager } from './Neo4jEntityManager.js';
 
 export type Neo4jOptions<
   EM extends Neo4jEntityManager = Neo4jEntityManager,
-  Entities extends (string | EntityClass<AnyEntity> | EntitySchema)[] = (
+  Entities extends readonly (string | EntityClass<AnyEntity> | EntitySchema)[] = (
     | string
     | EntityClass<AnyEntity>
     | EntitySchema
@@ -23,7 +23,7 @@ export type Neo4jOptions<
 
 export class Neo4jMikroORM<
   EM extends Neo4jEntityManager = Neo4jEntityManager,
-  Entities extends (string | EntityClass<AnyEntity> | EntitySchema)[] = (
+  Entities extends readonly (string | EntityClass<AnyEntity> | EntitySchema)[] = (
     | string
     | EntityClass<AnyEntity>
     | EntitySchema
@@ -32,7 +32,7 @@ export class Neo4jMikroORM<
   static override async init<
     D extends IDatabaseDriver = Neo4jDriver,
     EM extends EntityManager<D> = D[typeof EntityManagerType] & EntityManager<D>,
-    Entities extends (string | EntityClass<AnyEntity> | EntitySchema)[] = (
+    Entities extends readonly (string | EntityClass<AnyEntity> | EntitySchema)[] = (
       | string
       | EntityClass<AnyEntity>
       | EntitySchema
@@ -49,7 +49,7 @@ export class Neo4jMikroORM<
 /* istanbul ignore next */
 export function defineNeo4jConfig<
   EM extends Neo4jEntityManager = Neo4jEntityManager,
-  Entities extends (string | EntityClass<AnyEntity> | EntitySchema)[] = (
+  Entities extends readonly (string | EntityClass<AnyEntity> | EntitySchema)[] = (
     | string
     | EntityClass<AnyEntity>
     | EntitySchema

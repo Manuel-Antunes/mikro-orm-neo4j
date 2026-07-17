@@ -5,6 +5,7 @@ export * from './Neo4jPlatform.js';
 export * from './Neo4jEntityManager.js';
 export * from './Neo4jEntityRepository.js';
 export * from './Neo4jSchemaGenerator.js';
+export * from './Neo4jSchemaStatements.js';
 export * from './Neo4jQueryBuilder.js';
 export * from './Neo4jCypherBuilder.js';
 export * from './Neo4jCypherUtils.js';

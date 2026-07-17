@@ -1,9 +1,6 @@
 import {
   defineEntity as originalDefineEntity,
-  type EntityCtor,
   type EntityMetadataWithProperties,
-  type EntitySchema,
-  type InferEntityFromProperties,
 } from '@mikro-orm/core';
 
 // ─── Neo4j custom metadata types ─────────────────────────────────────────────
@@ -111,13 +108,16 @@ export function neo4j<T>(builder: T, options: Neo4jPropertyCustom): T {
  */
 
 export function defineEntity<
-  TName extends string,
-  TTableName extends string,
-  TProperties extends Record<string, any>,
-  TPK extends (keyof TProperties)[] | undefined = undefined,
-  TBase = never,
-  TRepository = never,
-  TForceObject extends boolean = false,
+  const TName extends string,
+  const TTableName extends string,
+  const TProperties extends Record<string, any>,
+  const TPK extends (keyof TProperties)[] | undefined = undefined,
+  const TBase = never,
+  const TRepository = never,
+  const TForceObject extends boolean = false,
+  const TDiscriminatorColumn extends string | undefined = undefined,
+  const TDiscriminatorValue extends string | number | undefined = undefined,
+  const TBaseDiscriminatorColumn extends string | undefined = undefined,
 >(
   meta: EntityMetadataWithProperties<
     TName,
@@ -126,14 +126,13 @@ export function defineEntity<
     TPK,
     TBase,
     TRepository,
-    TForceObject
+    TForceObject,
+    TDiscriminatorColumn,
+    TDiscriminatorValue,
+    TBaseDiscriminatorColumn
   > &
     Neo4jEntityCustom,
-): EntitySchema<
-  InferEntityFromProperties<TProperties, TPK, TBase, TRepository, TForceObject>,
-  TBase,
-  EntityCtor<InferEntityFromProperties<TProperties, TPK, TBase, TRepository, TForceObject>>
-> {
+) {
   const { labels, relationship, ...coreMeta } = meta;
   const schema = originalDefineEntity(coreMeta);
   // Attach Neo4j custom info to the schema's internal meta

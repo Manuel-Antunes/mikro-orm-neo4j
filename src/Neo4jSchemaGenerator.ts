@@ -4,6 +4,7 @@ import {
   type DropSchemaOptions,
   type EnsureDatabaseOptions,
   type EntityManager,
+  type EntityMetadata,
   type ISchemaGenerator,
   type MikroORM,
   type RefreshDatabaseOptions,
@@ -13,6 +14,7 @@ import graphqlFormatter from './graphql/graphql.js';
 import { Neo4jSchemaCypherGenerator } from './graphql/Neo4jSchemaCypherGenerator.js';
 import type { Neo4jDriver } from './Neo4jDriver.js';
 import { Neo4jEntityManager } from './Neo4jEntityManager.js';
+import { collectSchemaStatements } from './Neo4jSchemaStatements.js';
 
 export class Neo4jSchemaGenerator implements ISchemaGenerator {
   private readonly driver: Neo4jDriver;
@@ -28,8 +30,11 @@ export class Neo4jSchemaGenerator implements ISchemaGenerator {
     );
   }
 
+  /**
+   * A graph has no tables to create: its schema *is* the set of indexes and constraints.
+   */
   async create(_options: CreateSchemaOptions = {}): Promise<void> {
-    // Neo4j is schemaless for nodes/relationships; indexes can be added later
+    await this.ensureIndexes();
   }
 
   async update(_options: UpdateSchemaOptions = {}): Promise<void> {
@@ -53,8 +58,9 @@ export class Neo4jSchemaGenerator implements ISchemaGenerator {
     await this.driver.getConnection().execute(sql, {});
   }
 
+  /** Dry-run of {@link ensureIndexes}: the statements it would run, joined as a Cypher script. */
   async getCreateSchemaSQL(_options: CreateSchemaOptions = {}): Promise<string> {
-    return '';
+    return this.getSchemaStatements().join(';\n');
   }
 
   async getDropSchemaSQL(_options: Omit<DropSchemaOptions, 'dropDb'> = {}): Promise<string> {
@@ -84,8 +90,32 @@ export class Neo4jSchemaGenerator implements ISchemaGenerator {
     // noop for Neo4j in this driver
   }
 
+  /**
+   * Creates every index and unique constraint declared through `indexes` / `uniques`.
+   *
+   * Idempotent by construction — every statement carries `IF NOT EXISTS` — so it needs no diff
+   * against the live schema and is safe to run on each boot.
+   */
   async ensureIndexes(): Promise<void> {
-    // noop for MVP
+    const connection = this.driver.getConnection('write');
+
+    for (const statement of this.getSchemaStatements()) {
+      await connection.execute(statement, {});
+    }
+  }
+
+  /** Collects the Cypher statements for the discovered metadata. */
+  private getSchemaStatements(): string[] {
+    const metadata = this.em.getMetadata().getAll();
+    const list: EntityMetadata[] =
+      metadata instanceof Map
+        ? Array.from(metadata.values())
+        : (Object.values(metadata) as EntityMetadata[]);
+    const logger = this.em.config.getLogger();
+
+    return collectSchemaStatements(list, {
+      onWarning: (message) => logger.warn('schema', `[mikro-orm-neo4j] ${message}`),
+    });
   }
 
   // Legacy aliases kept for backwards compatibility with existing tests/usages.

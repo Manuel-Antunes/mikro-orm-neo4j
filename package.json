@@ -1,6 +1,6 @@
 {
   "name": "mikro-orm-neo4j",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Neo4j driver for MikroORM (OGM-style graph support)",
   "author": "Manuel Antunes",
   "license": "MIT",
@@ -51,9 +51,9 @@
   "devDependencies": {
     "@commitlint/cli": "^19.7.1",
     "@commitlint/config-conventional": "^19.7.1",
-    "@mikro-orm/core": "^7.0.2",
-    "@mikro-orm/decorators": "^7.0.2",
-    "@mikro-orm/reflection": "^7.0.2",
+    "@mikro-orm/core": "^7.1.6",
+    "@mikro-orm/decorators": "^7.1.6",
+    "@mikro-orm/reflection": "^7.1.6",
     "@swc/core": "^1.15.26",
     "@types/debug": "^4.1.13",
     "@types/node": "^22.13.5",

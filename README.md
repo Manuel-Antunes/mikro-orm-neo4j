@@ -14,6 +14,7 @@ This package provides seamless integration between MikroORM and Neo4j, enabling 
 - 💎 **Relationship Properties (Pivot Entities)**: Model complex graph relationships natively.
 - 🏗️ **Neo4jQueryBuilder**: Fluent API wrapping `@neo4j/cypher-builder` to write raw Cypher natively with ORM parameter injection, pattern matching, and relationship navigation (`.related()`).
 - 🏷️ **Polymorphic Queries**: Support for multi-label inheritance and querying.
+- 🗂️ **Indexes & Constraints**: `@Index()` / `@Unique()` declarations are materialized as real Neo4j indexes and constraints via `orm.schema.ensureIndexes()`.
 - 🧩 **Native Decorator Extensions**: Fully type-safe strongly-defined `neo4j` and `relation` configuration parameters integrated cleanly inside MikroORM properties via declaration merging.
 - 📦 Dual-format support (ESM & CommonJS).
 
@@ -385,7 +386,72 @@ The driver automatically maps Neo4j-specific error codes to standard MikroORM ex
 | `DeadlockException` | `Neo.TransientError.Transaction.DeadlockDetected` |
 | `ConnectionException` | `Neo.TransientError.Network.ConnectivityError` |
 
-### 8. Schema Generation & GraphQL Support
+### 8. Indexes & Constraints (`ensureIndexes`)
+
+A graph has no tables to create: its schema *is* its indexes and constraints. `orm.schema.ensureIndexes()` reads the `indexes` / `uniques` you declared on your entities and creates them in Neo4j.
+
+```typescript
+@Entity({ tableName: 'Document' })
+@Index({ properties: ['tenant', 'id'] })
+@Unique({ properties: ['tenant', 'externalId'] })
+export class Document {
+  @PrimaryKey()
+  id!: string;
+
+  @Property()
+  tenant!: string;
+
+  @Property()
+  externalId!: string;
+}
+
+// Typically at bootstrap:
+await orm.schema.ensureIndexes();
+```
+
+Every statement is emitted with `IF NOT EXISTS`, so `ensureIndexes()` is idempotent and safe to run on every boot — no diffing against the live schema. `orm.schema.create()` delegates to it, and `orm.schema.getCreateSchemaSQL()` returns the Cypher without executing it, which is useful as a dry-run:
+
+```typescript
+console.log(await orm.schema.getCreateSchemaSQL());
+// CREATE RANGE INDEX `Document_tenant_id_idx` IF NOT EXISTS FOR (n:`Document`) ON (n.`tenant`, n.`id`);
+// CREATE CONSTRAINT `Document_tenant_externalId_unique` IF NOT EXISTS FOR (n:`Document`) REQUIRE (n.`tenant`, n.`externalId`) IS UNIQUE
+```
+
+#### Index types
+
+`type` maps onto the Neo4j index kinds. Omitting it gives you a `RANGE` index, which is what you want for equality and range lookups.
+
+| `type` | Neo4j index | Notes |
+|---|---|---|
+| *(omitted)* / `'range'` | `RANGE` | Supports composite keys. |
+| `'text'` | `TEXT` | Single property only. |
+| `'point'` | `POINT` | Single property only. |
+| `'fulltext'` | `FULLTEXT` | Spans several properties (`ON EACH [...]`). |
+
+Property order matters for composite indexes: `['tenant', 'id']` can serve a lookup by `tenant` alone, but not by `id` alone.
+
+#### Nodes, edges and labels
+
+- **Multi-label entities** are indexed on their **primary label** only. Neo4j indexes per label, and a query matching a secondary label already seeks through the primary one, so indexing all of them would multiply indexes for no gain.
+- **Relationship entities** (`@Entity({ relationship: { type: 'ACTED_IN' } })`) are indexed as edges: `FOR ()-[r:ACTED_IN]-() ON (r.billing)`.
+- Indexes are built on the **property name as written on the node** — the JS key, which is what the driver persists. The naming strategy affects the label, not the properties.
+
+#### Options that have no Neo4j equivalent
+
+Rather than emit an index that quietly means something different from what you declared, the generator is explicit about what it cannot map:
+
+| Option | Behaviour |
+|---|---|
+| `where` (partial index/constraint) | **Throws.** A partial unique emitted as a total one would reject legitimate rows. Model the filtered subset with a dedicated label instead. |
+| `expression` (functional index) | Warns and skips. |
+| `type: 'vector'` | Throws — vector indexes need an explicit dimension and similarity function; create them with raw Cypher. |
+| `include`, `fillFactor`, `invisible`, `deferMode`, `clustered` | Ignored — they are SQL planner hints with no Neo4j meaning. |
+
+`NODE KEY` and `IS NOT NULL` constraints are Enterprise-only in Neo4j and are not emitted.
+
+> **Not covered yet**: `update()` (which would require diffing against `SHOW INDEXES`) and `drop()`. Since `ensureIndexes()` is idempotent, removing a declaration does not remove the index — drop it manually with `DROP INDEX <name>`.
+
+### 9. Schema Generation & GraphQL Support
 
 The driver includes a `Neo4jSchemaGenerator` that can export your MikroORM metadata as a GraphQL SDL (Schema Definition Language) compatible with the `@neo4j/graphql` library.
 
@@ -449,7 +515,7 @@ type Product @node {
 }
 ```
 
-### 9. Advanced Usage
+### 10. Advanced Usage
 
 ### Custom labels via `defineEntity`
 
