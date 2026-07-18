@@ -545,6 +545,12 @@ const users = await em.run(
 );
 ```
 
+## Appendices
+
+In-depth notes on specific fixes and behaviours live under [`docs/`](./docs):
+
+- [Idempotent `MERGE` (C10) & tenant-scoped relations (C11)](./docs/idempotent-merge-and-tenant-scoped-relations.md) — how `nativeInsert` became idempotent by primary key, how relationships are now matched on the **full** primary key (closing a cross-tenant leak), and the composite primary-key support that ships alongside.
+
 ## Troubleshooting
 
 ### Node.js `globSync` SyntaxError

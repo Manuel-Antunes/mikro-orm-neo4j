@@ -290,4 +290,106 @@ export class Neo4jCypherUtils {
     }
     return clause;
   }
+
+  /**
+   * Builds an equality predicate that matches a node by its COMPLETE primary
+   * key, iterating every property returned by `getPrimaryProps()` instead of
+   * hardcoding `"id"`.
+   *
+   * This is what closes the cross-tenant relationship leak (C11): when the PK
+   * is composite (e.g. `(tenant, id)`) two different tenants can share the same
+   * business `id`, and matching on `id` alone would attach an edge to both
+   * nodes. Matching on the full PK isolates the correct endpoint.
+   *
+   * @param node - the Cypher node variable to constrain
+   * @param meta - entity metadata (source of the primary props)
+   * @param idValue - the PK value: a scalar for a single-column PK, or an
+   *   object keyed by PK property name for a composite PK
+   */
+  static pkPredicate<T extends object>(
+    node: Cypher.Node,
+    meta: EntityMetadata<T> | undefined,
+    idValue: unknown,
+  ): Cypher.Predicate {
+    const pks = meta?.getPrimaryProps() ?? [];
+    // Fallback for targets without metadata (string-typed relations): match by id.
+    if (pks.length === 0) {
+      return Cypher.eq(node.property('id'), new Cypher.Param(idValue));
+    }
+    const preds = pks.map((pk) => {
+      const value =
+        pks.length === 1 && (typeof idValue !== 'object' || idValue === null)
+          ? idValue
+          : (idValue as Dictionary)?.[pk.name];
+      return Cypher.eq(node.property(pk.name), new Cypher.Param(value));
+    });
+    return preds.length === 1 ? preds[0] : Cypher.and(...preds)!;
+  }
+
+  /**
+   * Extracts the primary-key value out of a node's raw property bag, converting
+   * Neo4j native types along the way.
+   *
+   * @returns a scalar for a single-column PK, or a `{ [pkName]: value }` object
+   *   for a composite PK (the shape `pkPredicate` expects downstream).
+   */
+  static extractPk<T extends object>(meta: EntityMetadata<T>, props: Dictionary): unknown {
+    const pks = meta.getPrimaryProps();
+    if (pks.length === 1) {
+      return this.convertNeo4jValue(props?.[pks[0].name]);
+    }
+    const pk: Dictionary = {};
+    for (const p of pks) {
+      pk[p.name] = this.convertNeo4jValue(props?.[p.name]);
+    }
+    return pk;
+  }
+
+  /**
+   * Normalizes the value of a relationship endpoint into the PK shape used for
+   * matching: a scalar for a single-column PK, or a `{ [pkName]: value }`
+   * object for a composite PK.
+   *
+   * The endpoint arrives in several forms depending on how MikroORM serialized
+   * it:
+   * - a scalar id (single PK given directly);
+   * - a positional array `[id, tenant]` (MikroORM's wire format for a composite
+   *   FK, ordered to match `getPrimaryProps()`);
+   * - an entity/reference object keyed by PK property name.
+   */
+  static extractRelatedPk<T extends object>(
+    meta: EntityMetadata<T> | undefined,
+    val: unknown,
+  ): unknown {
+    if (val === null || val === undefined) {
+      return val;
+    }
+    const pks = meta?.getPrimaryProps() ?? [];
+    if (pks.length === 0) {
+      return val;
+    }
+    // Composite key delivered as a positional array, in primary-prop order.
+    if (Array.isArray(val)) {
+      if (pks.length === 1) {
+        return val[0];
+      }
+      const pk: Dictionary = {};
+      pks.forEach((p, i) => {
+        pk[p.name] = val[i];
+      });
+      return pk;
+    }
+    // Scalar id given directly.
+    if (typeof val !== 'object') {
+      return val;
+    }
+    if (pks.length === 1) {
+      return (val as Dictionary)[pks[0].name] ?? val;
+    }
+    const pk: Dictionary = {};
+    for (const p of pks) {
+      pk[p.name] = (val as Dictionary)[p.name];
+    }
+    return pk;
+  }
 }

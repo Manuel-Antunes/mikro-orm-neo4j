@@ -166,18 +166,34 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     const payload = this.preparePayload(meta, data);
     const labels = Neo4jCypherBuilder.getNodeLabels(meta);
     const node = new Cypher.Node();
-    const props: Record<string, any> = {};
+
+    // C10: MERGE on the primary key (not CREATE) so re-inserting the same PK is
+    // idempotent — it updates the existing node instead of duplicating it. The
+    // PK goes into the MERGE pattern; every other property is applied with SET
+    // afterwards so the merge key stays stable and existing props aren't wiped.
+    const pkNames = new Set<string>(meta.getPrimaryProps().map((p) => p.name as string));
+    const keyProps: Record<string, any> = {};
+    const setters: [any, any][] = [];
     for (const [key, value] of Object.entries(payload.nodeProps)) {
-      props[key] = new Cypher.Param(value);
+      if (pkNames.has(key)) {
+        keyProps[key] = new Cypher.Param(value);
+      } else {
+        setters.push([node.property(key), new Cypher.Param(value)]);
+      }
     }
-    const pattern = new Cypher.Pattern(node, { labels, properties: props });
-    const query = new Cypher.Create(pattern).return(node);
+    const pattern = new Cypher.Pattern(node, { labels, properties: keyProps });
+    let query: any = new Cypher.Merge(pattern);
+    if (setters.length > 0) {
+      query = query.set(...setters);
+    }
+    query = query.return(node);
     const { cypher, params } = query.build();
     const res = await this.connection.executeRaw(cypher, params, options.ctx);
     // Get the node from the first key in the record (cypher-builder auto-generates names like 'this0')
     const resultNode = res.records[0].get(res.records[0].keys[0]);
     if (payload.relations.length) {
-      await this.persistRelations(meta, resultNode.properties.id, payload.relations, options.ctx);
+      const sourceId = Neo4jCypherUtils.extractPk(meta, resultNode.properties);
+      await this.persistRelations(meta, sourceId, payload.relations, options.ctx);
     }
     return this.transformResult(meta, resultNode.properties as EntityData<T>);
   }
@@ -225,7 +241,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     // Get the node from the first key in the record
     const resultNode = res.records[0]?.get(res.records[0]?.keys[0]);
     if (resultNode && payload.relations.length) {
-      const idValue = Neo4jCypherUtils.convertNeo4jValue(resultNode.properties?.id) as string;
+      const idValue = Neo4jCypherUtils.extractPk(meta, resultNode.properties);
       await this.persistRelations(meta, idValue, payload.relations, options.ctx, true);
     }
     return resultNode
@@ -629,11 +645,16 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       value: unknown;
     }[] = [];
 
-    const pk = meta.getPrimaryProps()[0];
-    const id = (data as Dictionary)[pk.name] ?? crypto.randomUUID();
+    // Include EVERY primary-key column (composite PKs like (tenant, id) are
+    // supported), auto-generating a UUID only for a missing part — this keeps
+    // the single-PK behaviour where an absent `id` is generated.
+    const pkProps = meta.getPrimaryProps();
     // Only include primary key for inserts, not updates
     if (!partial) {
-      nodeProps[pk.name] = id;
+      for (const pkProp of pkProps) {
+        const val = (data as Dictionary)[pkProp.name];
+        nodeProps[pkProp.name] = val ?? crypto.randomUUID();
+      }
     }
 
     const props = Object.values(meta.properties) as EntityProperty<T>[];
@@ -645,10 +666,14 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
       if (prop.kind === ReferenceKind.MANY_TO_ONE || prop.kind === ReferenceKind.ONE_TO_ONE) {
         const val = (data as Dictionary)[prop.name];
         if (val !== undefined) {
+          // Full PK (scalar or composite object) used to MATCH the endpoint.
+          const targetPk = Neo4jCypherUtils.extractRelatedPk(prop.targetMeta, val);
+          // Denormalized FK stored on the node stays scalar (Neo4j can't store an
+          // object as a property); for composite PKs we keep the first column.
           nodeProps[prop.name] =
-            typeof val === 'object' && val !== null
-              ? ((val as any)[prop.targetMeta!.primaryKeys[0]] ?? val)
-              : val;
+            targetPk !== null && typeof targetPk === 'object'
+              ? (targetPk as Dictionary)[prop.targetMeta!.getPrimaryProps()[0].name]
+              : targetPk;
           // Get relationship metadata from WeakMap or fallback to custom property
           const relType =
             Neo4jCypherBuilder.getRelationshipType(meta, prop) ?? prop.name.toUpperCase();
@@ -660,7 +685,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
             target: prop.type,
             direction: direction ?? 'OUT',
             type: relType,
-            value: nodeProps[prop.name],
+            value: targetPk,
           });
         }
         continue;
@@ -678,10 +703,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
           const propCustomDir = (prop as any).relationship?.direction;
           const direction: 'IN' | 'OUT' = propCustomDir ?? 'OUT';
           items.forEach((item: any) => {
-            const idVal =
-              typeof item === 'object' && item !== null
-                ? (item[prop.targetMeta!.primaryKeys[0]] ?? item)
-                : item;
+            const idVal = Neo4jCypherUtils.extractRelatedPk(prop.targetMeta, item);
             relations.push({
               prop,
               target: prop.type,
@@ -710,12 +732,15 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
   ): Promise<QueryResult<T>> {
     // A relationship entity connects two nodes and stores properties on the relationship
     const [sourceProp, targetProp] = Neo4jCypherBuilder.getRelationshipEntityEnds(meta);
-    const sourceId =
-      (data as any)[sourceProp.name]?.[sourceProp.targetMeta!.primaryKeys[0]] ??
-      (data as any)[sourceProp.name];
-    const targetId =
-      (data as any)[targetProp.name]?.[targetProp.targetMeta!.primaryKeys[0]] ??
-      (data as any)[targetProp.name];
+    // Normalize endpoints to their full PK (scalar or composite object).
+    const sourceId = Neo4jCypherUtils.extractRelatedPk(
+      sourceProp.targetMeta,
+      (data as any)[sourceProp.name],
+    );
+    const targetId = Neo4jCypherUtils.extractRelatedPk(
+      targetProp.targetMeta,
+      (data as any)[targetProp.name],
+    );
 
     if (!sourceId || !targetId) {
       throw new Error(`Relationship entity ${meta.className} must have both source and target set`);
@@ -765,8 +790,8 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
     matchQuery = matchQuery.match(bPattern);
     matchQuery = matchQuery.where(
       Cypher.and(
-        Cypher.eq(aNode.property('id'), new Cypher.Param(sourceId)),
-        Cypher.eq(bNode.property('id'), new Cypher.Param(targetId)),
+        Neo4jCypherUtils.pkPredicate(aNode, sourceProp.targetMeta, sourceId),
+        Neo4jCypherUtils.pkPredicate(bNode, targetProp.targetMeta, targetId),
       ),
     );
 
@@ -795,7 +820,7 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
 
   private async persistRelations<T extends object>(
     sourceMeta: EntityMetadata<T>,
-    sourceId: string,
+    sourceId: unknown,
     relations: {
       prop: EntityProperty<T>;
       target: EntityName<AnyEntity> | string;
@@ -831,16 +856,17 @@ export class Neo4jDriver extends DatabaseDriver<Neo4jConnection> {
           ? new Cypher.Pattern(aNode).related(newRel, { type }).to(bNode)
           : new Cypher.Pattern(bNode).related(newRel, { type }).to(aNode);
 
-      // Build query: MATCH (a) MATCH (b:Label) WHERE a.id=$p1 AND b.id=$p2 MERGE (a)-[r:TYPE]->(b)
-      const sourceIdParam = new Cypher.Param(sourceId);
-      const targetIdParam = new Cypher.Param(rel.value);
-
+      // Build query: MATCH (a) MATCH (b:Label) WHERE <a full PK> AND <b full PK>
+      //   MERGE (a)-[r:TYPE]->(b)
+      // C11: match BOTH endpoints on their complete primary key (via pkPredicate)
+      // rather than a hardcoded `id`, so a shared business id across tenants can't
+      // fan the edge out to the wrong node.
       let createQuery: any = new Cypher.Match(aPattern);
       createQuery = createQuery.match(bPattern);
       createQuery = createQuery.where(
         Cypher.and(
-          Cypher.eq(aNode.property('id'), sourceIdParam),
-          Cypher.eq(bNode.property('id'), targetIdParam),
+          Neo4jCypherUtils.pkPredicate(aNode, sourceMeta, sourceId),
+          Neo4jCypherUtils.pkPredicate(bNode, rel.prop.targetMeta, rel.value),
         ),
       );
       createQuery = createQuery.merge(mergePattern).return(newRel);
